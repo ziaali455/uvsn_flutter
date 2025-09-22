@@ -1,7 +1,7 @@
 {
-  "buildCommand": "flutter build web --release --base-href /",
+  "buildCommand": "./build.sh",
   "outputDirectory": "build/web",
-  "installCommand": "if [ -e pubspec.yaml ]; then dart pub get; fi",
+  "installCommand": "echo 'No additional install needed'",
   "github": {
     "silent": true
   },
