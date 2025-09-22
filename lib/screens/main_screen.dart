@@ -93,7 +93,7 @@ class _MainScreenState extends State<MainScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // RAW Camera FAB (iOS only)
-          if (Platform.isIOS)
+          if (!kIsWeb && Platform.isIOS)
             FloatingActionButton(
               heroTag: "raw_camera",
               onPressed: _openRawCamera,
@@ -101,7 +101,7 @@ class _MainScreenState extends State<MainScreen> {
               foregroundColor: Colors.white,
               child: const Icon(Icons.camera_alt),
             ),
-          if (Platform.isIOS) const SizedBox(height: 8),
+          if (!kIsWeb && Platform.isIOS) const SizedBox(height: 8),
 
           // Main Add Images FAB
           FloatingActionButton.extended(
@@ -584,7 +584,7 @@ class _MainScreenState extends State<MainScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(exportPath),
-                if (Platform.isIOS) ...[
+                if (!kIsWeb && Platform.isIOS) ...[
                   const SizedBox(height: 8),
                   const Text(
                     'Find your file in the Files app under "UVSN Image Analyzer"',
