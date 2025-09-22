@@ -1,6 +1,6 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": "build/web",
+  "outputDirectory": "./build/web",
   "installCommand": "npm install",
   "github": {
     "silent": true
