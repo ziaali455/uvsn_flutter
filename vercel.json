@@ -7,7 +7,34 @@
   },
   "headers": [
     {
-      "source": "/(.*\\.(js|wasm|json|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|css|map))",
+      "source": "/static/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/(.*\\.js)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/(.*\\.wasm)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
       "headers": [
         {
           "key": "Cache-Control",
@@ -23,12 +50,6 @@
           "value": "public, max-age=0, must-revalidate"
         }
       ]
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/((?!.*\\.(js|wasm|json|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|css|map|html)).*)",
-      "destination": "/index.html"
     }
   ]
 }
