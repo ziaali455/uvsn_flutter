@@ -1,10 +1,13 @@
 {
+  "buildCommand": "flutter build web --release --base-href /",
+  "outputDirectory": "build/web",
+  "installCommand": "if [ -e pubspec.yaml ]; then dart pub get; fi",
   "github": {
     "silent": true
   },
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/(.*\\.(js|wasm|json|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|css|map))",
       "headers": [
         {
           "key": "Cache-Control",
@@ -24,7 +27,7 @@
   ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!.*\\.(js|wasm|json|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|css|map|html)).*)",
       "destination": "/index.html"
     }
   ]

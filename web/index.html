@@ -34,6 +34,31 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+  <div id="loading" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-family: sans-serif; color: #666;">
+    Loading Flutter App...
+  </div>
+  <script>
+    console.log('Index.html loaded');
+    console.log('Base href:', document.querySelector('base').href);
+    console.log('Current URL:', window.location.href);
+    
+    window.addEventListener('error', function(e) {
+      console.error('Global error:', e.error);
+      document.getElementById('loading').innerHTML = 'Error loading app: ' + e.message;
+    });
+    
+    window.addEventListener('unhandledrejection', function(e) {
+      console.error('Unhandled promise rejection:', e.reason);
+      document.getElementById('loading').innerHTML = 'Promise rejection: ' + e.reason;
+    });
+  </script>
+  <script src="flutter_bootstrap.js" async onerror="console.error('Failed to load flutter_bootstrap.js')"></script>
+  <script>
+    // Hide loading message once Flutter starts
+    window.addEventListener('flutter-first-frame', function() {
+      const loading = document.getElementById('loading');
+      if (loading) loading.style.display = 'none';
+    });
+  </script>
 </body>
 </html>
