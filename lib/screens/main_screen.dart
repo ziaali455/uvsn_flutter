@@ -22,6 +22,8 @@ class _MainScreenState extends State<MainScreen> {
   final List<ImageAnalysis> _analyses = [];
   bool _isLoading = false;
   String? _errorMessage;
+  double _analysisProgress = 0.0;
+  String _analysisStatus = '';
 
   @override
   Widget build(BuildContext context) {
@@ -88,7 +90,12 @@ class _MainScreenState extends State<MainScreen> {
             ),
         ],
       ),
-      body: _buildBody(),
+      body: Stack(
+        children: [
+          _buildBody(),
+          if (_isLoading) _buildProgressOverlay(),
+        ],
+      ),
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -110,7 +117,9 @@ class _MainScreenState extends State<MainScreen> {
             backgroundColor: Theme.of(context).colorScheme.primary,
             foregroundColor: Colors.white,
             label: Text(
-              _isLoading ? 'Analyzing...' : 'Add Images',
+              _isLoading
+                  ? 'Analyzing... ${(_analysisProgress * 100).toStringAsFixed(0)}%'
+                  : 'Add Images',
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             icon: _isLoading
@@ -153,8 +162,8 @@ class _MainScreenState extends State<MainScreen> {
               Text(
                 'Oops! Something went wrong',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                      fontWeight: FontWeight.w600,
+                    ),
               ),
               const SizedBox(height: 12),
               Text(
@@ -203,8 +212,8 @@ class _MainScreenState extends State<MainScreen> {
               Text(
                 'Ready to Analyze Images?',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+                      fontWeight: FontWeight.w600,
+                    ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
@@ -232,52 +241,51 @@ class _MainScreenState extends State<MainScreen> {
                     Text(
                       'Supported Formats',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                            fontWeight: FontWeight.w600,
+                          ),
                     ),
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
                       runSpacing: 4,
-                      children:
-                          [
-                                'JPG',
-                                'PNG',
-                                'BMP',
-                                'GIF',
-                                'WebP',
-                                'DNG',
-                                'RAW',
-                                'CR2',
-                                'NEF',
-                                'ARW',
-                                'RW2',
-                              ]
-                              .map(
-                                (format) => Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    format,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.primary,
-                                    ),
-                                  ),
+                      children: [
+                        'JPG',
+                        'PNG',
+                        'BMP',
+                        'GIF',
+                        'WebP',
+                        'DNG',
+                        'RAW',
+                        'CR2',
+                        'NEF',
+                        'ARW',
+                        'RW2',
+                      ]
+                          .map(
+                            (format) => Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.primary.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                format,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.primary,
                                 ),
-                              )
-                              .toList(),
+                              ),
+                            ),
+                          )
+                          .toList(),
                     ),
                   ],
                 ),
@@ -330,15 +338,17 @@ class _MainScreenState extends State<MainScreen> {
                     children: [
                       Text(
                         'Analysis Summary',
-                        style: Theme.of(context).textTheme.titleMedium
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
                             ?.copyWith(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         '${_analyses.length} image${_analyses.length == 1 ? '' : 's'} analyzed',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey.shade600,
-                        ),
+                              color: Colors.grey.shade600,
+                            ),
                       ),
                     ],
                   ),
@@ -487,6 +497,8 @@ class _MainScreenState extends State<MainScreen> {
       setState(() {
         _isLoading = true;
         _errorMessage = null;
+        _analysisProgress = 0.0;
+        _analysisStatus = 'Preparing analysis...';
       });
 
       final files = await SimpleFilePicker.pickImages(
@@ -496,7 +508,11 @@ class _MainScreenState extends State<MainScreen> {
       );
 
       if (files.isEmpty) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _analysisProgress = 0.0;
+          _analysisStatus = '';
+        });
         return;
       }
 
@@ -508,16 +524,35 @@ class _MainScreenState extends State<MainScreen> {
       if (supportedFiles.isEmpty) {
         setState(() {
           _isLoading = false;
+          _analysisProgress = 0.0;
+          _analysisStatus = '';
           _errorMessage = 'No supported image formats found';
         });
         return;
       }
 
-      // Analyze images
+      // Analyze images with progress tracking
       final List<ImageAnalysis> newAnalyses = [];
+      int processedCount = 0;
 
       for (final file in supportedFiles) {
         try {
+          // Update progress
+          processedCount++;
+          if (mounted) {
+            setState(() {
+              // Update loading state with progress
+            });
+          }
+
+          debugPrint(
+              'Processing ${file['name']} (${processedCount}/${supportedFiles.length})');
+
+          // Process all files regardless of size for accurate analysis
+          final fileSize = file['size'] ?? 0;
+          debugPrint(
+              'Processing ${file['name']} (${_formatFileSize(fileSize)})');
+
           ImageAnalysis analysis;
 
           if (file['bytes'] != null) {
@@ -525,7 +560,15 @@ class _MainScreenState extends State<MainScreen> {
             analysis = await UnifiedImageService.analyzeImageFromBytes(
               file['bytes'],
               file['name'],
-              file['size'] ?? 0,
+              fileSize,
+              onProgress: (progress, status) {
+                if (mounted) {
+                  setState(() {
+                    _analysisProgress = progress;
+                    _analysisStatus = status;
+                  });
+                }
+              },
             );
           } else if (file['path'] != null) {
             // Fallback for mobile/desktop if bytes are not available
@@ -537,14 +580,26 @@ class _MainScreenState extends State<MainScreen> {
           }
 
           newAnalyses.add(analysis);
+          debugPrint('Successfully analyzed ${file['name']}');
         } catch (e) {
           debugPrint('Failed to analyze ${file['name']}: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Failed to analyze ${file['name']}: ${e.toString().replaceAll('Exception: ', '')}'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         }
       }
 
       setState(() {
         _analyses.addAll(newAnalyses);
         _isLoading = false;
+        _analysisProgress = 0.0;
+        _analysisStatus = '';
       });
 
       if (mounted && newAnalyses.isNotEmpty) {
@@ -560,6 +615,8 @@ class _MainScreenState extends State<MainScreen> {
     } catch (e) {
       setState(() {
         _isLoading = false;
+        _analysisProgress = 0.0;
+        _analysisStatus = '';
         _errorMessage = 'Failed to analyze images: $e';
       });
     }
@@ -751,6 +808,104 @@ class _MainScreenState extends State<MainScreen> {
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
           ),
         ],
+      ),
+    );
+  }
+
+  // Helper method for file size formatting
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024)
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
+  Widget _buildProgressOverlay() {
+    return Container(
+      color: Colors.black.withOpacity(0.7),
+      child: Center(
+        child: Container(
+          margin: const EdgeInsets.all(32),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Title
+              Text(
+                'Analyzing Image',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+              const SizedBox(height: 24),
+
+              // Progress bar
+              Container(
+                width: double.infinity,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: FractionallySizedBox(
+                  alignment: Alignment.centerLeft,
+                  widthFactor: _analysisProgress,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Progress percentage
+              Text(
+                '${(_analysisProgress * 100).toStringAsFixed(1)}%',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+              ),
+              const SizedBox(height: 8),
+
+              // Status text
+              Text(
+                _analysisStatus,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.grey.shade600,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+
+              // Animated loading indicator
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
