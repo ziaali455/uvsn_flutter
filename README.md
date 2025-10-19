@@ -1,13 +1,22 @@
 # UVSN Image Analyzer
 
-A Flutter application that analyzes images to extract mean RGB values and EXIF metadata, with support for various image formats including RAW files.
+A Flutter application that analyzes images to extract mean RGB values, chromaticity coordinates, and EXIF metadata, with support for various image formats including RAW files. Now with **optional Python backend** for enhanced RAW format support!
+
+## 🆕 Dual Processing Modes
+
+- **Flutter Processing**: Fast, client-side analysis for standard formats
+- **Python API Processing**: Enhanced RAW support with better compression handling
+- **Toggle Between Modes**: Switch seamlessly in the app interface
 
 ## Features
 
 ### Image Analysis
 - **Mean RGB Extraction**: Calculates average red, green, and blue values from images
+- **Chromaticity Analysis**: Computes chromaticity coordinates (r, g) and standard deviations
 - **EXIF Data Support**: Extracts and displays metadata from images that contain EXIF information
+- **Photographic Calculations**: Calculates S_v, A_v, T_v, and B_v values from EXIF data
 - **Multiple Format Support**: Handles JPG, PNG, BMP, GIF, WebP, DNG, RAW, CR2, NEF, ARW, RW2 formats
+- **Enhanced RAW Support**: Python backend handles DNG compression type 7 and other advanced formats
 
 ### Image Input
 - **Gallery Selection**: Pick images from device gallery
@@ -69,6 +78,29 @@ A Flutter application that analyzes images to extract mean RGB values and EXIF m
    flutter run -d chrome
    ```
 
+### Optional: Python API Setup
+
+For enhanced RAW format support, set up the Python backend:
+
+1. **Install Python dependencies**
+   ```bash
+   cd api
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+2. **Run the Python API**
+   ```bash
+   uvicorn analyze:app --reload --port 3000
+   ```
+
+3. **Enable in Flutter app**
+   - Look for the cloud icon toggle in the app bar
+   - Switch it on to use Python API processing
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for full deployment instructions.
+
 ## Usage
 
 ### Basic Workflow
@@ -126,8 +158,18 @@ A Flutter application that analyzes images to extract mean RGB values and EXIF m
 - **Screens**: Main application screens
 
 ### Key Dependencies
+
+**Flutter:**
 - `image`: Image processing and RGB calculation
 - `exif`: EXIF metadata extraction
+- `http`: HTTP client for Python API communication
+
+**Python API (Optional):**
+- `fastapi`: Web framework for API endpoints
+- `rawpy`: Enhanced RAW format support via libraw
+- `Pillow`: Image processing
+- `numpy`: Efficient numerical computations
+- `exifread`: EXIF metadata extraction
 - `image_picker`: Camera and gallery access
 - `file_picker`: File selection
 - `path_provider`: File system access

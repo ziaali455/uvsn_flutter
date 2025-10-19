@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../models/image_analysis.dart';
 import '../services/simple_file_picker.dart';
 import '../services/unified_image_service.dart';
+import '../services/python_image_service.dart';
 import '../services/unified_export_service.dart';
 import '../services/raw_camera_service.dart';
 import '../widgets/image_analysis_card.dart';
@@ -24,6 +25,26 @@ class _MainScreenState extends State<MainScreen> {
   String? _errorMessage;
   double _analysisProgress = 0.0;
   String _analysisStatus = '';
+  bool _usePythonApi = false; // Toggle between Flutter and Python processing
+  bool? _pythonApiAvailable;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPythonApiAvailability();
+  }
+
+  Future<void> _checkPythonApiAvailability() async {
+    final available = await PythonImageService.isApiAvailable();
+    setState(() {
+      _pythonApiAvailable = available;
+    });
+    if (available) {
+      debugPrint('✅ Python API is available');
+    } else {
+      debugPrint('❌ Python API is not available');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +70,47 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         actions: [
+          // Python API toggle
+          if (_pythonApiAvailable == true)
+            Tooltip(
+              message: _usePythonApi
+                  ? 'Using Python API (better RAW support)'
+                  : 'Using Flutter processing',
+              child: Container(
+                margin: const EdgeInsets.only(right: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.cloud,
+                      size: 16,
+                      color: _usePythonApi
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.grey,
+                    ),
+                    const SizedBox(width: 4),
+                    Switch(
+                      value: _usePythonApi,
+                      onChanged: (value) {
+                        setState(() {
+                          _usePythonApi = value;
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              value
+                                  ? 'Switched to Python API (better RAW support)'
+                                  : 'Switched to Flutter processing',
+                            ),
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
           if (_analyses.isNotEmpty)
             Container(
               margin: const EdgeInsets.only(right: 16),
@@ -556,20 +618,38 @@ class _MainScreenState extends State<MainScreen> {
           ImageAnalysis analysis;
 
           if (file['bytes'] != null) {
-            // Use bytes for all platforms if available
-            analysis = await UnifiedImageService.analyzeImageFromBytes(
-              file['bytes'],
-              file['name'],
-              fileSize,
-              onProgress: (progress, status) {
-                if (mounted) {
-                  setState(() {
-                    _analysisProgress = progress;
-                    _analysisStatus = status;
-                  });
-                }
-              },
-            );
+            // Use Python API or Flutter processing based on toggle
+            if (_usePythonApi && _pythonApiAvailable == true) {
+              debugPrint('🐍 Using Python API for ${file['name']}');
+              analysis = await PythonImageService.analyzeImageFromBytes(
+                file['bytes'],
+                file['name'],
+                fileSize,
+                onProgress: (progress, status) {
+                  if (mounted) {
+                    setState(() {
+                      _analysisProgress = progress;
+                      _analysisStatus = '🐍 $status';
+                    });
+                  }
+                },
+              );
+            } else {
+              debugPrint('📱 Using Flutter processing for ${file['name']}');
+              analysis = await UnifiedImageService.analyzeImageFromBytes(
+                file['bytes'],
+                file['name'],
+                fileSize,
+                onProgress: (progress, status) {
+                  if (mounted) {
+                    setState(() {
+                      _analysisProgress = progress;
+                      _analysisStatus = status;
+                    });
+                  }
+                },
+              );
+            }
           } else if (file['path'] != null) {
             // Fallback for mobile/desktop if bytes are not available
             analysis = await UnifiedImageService.analyzeImageFromFile(

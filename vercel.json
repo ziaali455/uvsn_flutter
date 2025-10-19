@@ -7,9 +7,17 @@
       "config": {
         "distDir": "build/web"
       }
+    },
+    {
+      "src": "api/analyze.py",
+      "use": "@vercel/python"
     }
   ],
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"

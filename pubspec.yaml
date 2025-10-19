@@ -43,6 +43,9 @@ dependencies:
   # EXIF data extraction
   exif: ^3.3.0
   
+  # HTTP client for Python API
+  http: ^1.1.0
+  
   # File handling and storage
   path_provider: ^2.1.2
   permission_handler: ^11.3.0
