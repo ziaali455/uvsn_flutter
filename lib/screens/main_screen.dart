@@ -442,18 +442,12 @@ class _MainScreenState extends State<MainScreen> {
                   itemCount: _analyses.length,
                   itemBuilder: (context, index) {
                     final analysis = _analyses[index];
-                    return ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minWidth: kIsWeb ? 300 : 280,
-                        maxWidth: kIsWeb ? 400 : double.infinity,
-                      ),
-                      child: ImageAnalysisCard(
-                        analysis: analysis,
-                        onExport: () => _exportSingle(analysis),
-                        onDelete: () => _deleteAnalysis(index),
-                        onSelectLampCondition: () =>
-                            _selectLampCondition(analysis),
-                      ),
+                    return ImageAnalysisCard(
+                      analysis: analysis,
+                      onExport: () => _exportSingle(analysis),
+                      onDelete: () => _deleteAnalysis(index),
+                      onSelectLampCondition: () =>
+                          _selectLampCondition(analysis),
                     );
                   },
                 );
