@@ -3,6 +3,6 @@ uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 Pillow==11.0.0
 numpy==2.1.0
-rawpy==0.22.0
+rawpy==0.25.1
 exifread==3.0.0
 
