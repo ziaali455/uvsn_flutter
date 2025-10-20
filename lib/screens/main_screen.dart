@@ -462,11 +462,12 @@ class _MainScreenState extends State<MainScreen> {
 
   int _getCrossAxisCount() {
     final width = MediaQuery.of(context).size.width;
+    final itemCount = _analyses.length;
     int crossAxisCount;
 
     // More responsive breakpoints for better web layout
     if (kIsWeb) {
-      // Very aggressive for desktop web
+      // Calculate based on screen width
       if (width > 2400)
         crossAxisCount = 10;
       else if (width > 2200)
@@ -487,6 +488,9 @@ class _MainScreenState extends State<MainScreen> {
         crossAxisCount = 2;
       else
         crossAxisCount = 1;
+      
+      // Don't use more columns than items
+      crossAxisCount = crossAxisCount > itemCount ? itemCount : crossAxisCount;
     } else {
       // Conservative for mobile
       if (width > 1200)
@@ -497,10 +501,13 @@ class _MainScreenState extends State<MainScreen> {
         crossAxisCount = 2;
       else
         crossAxisCount = 1;
+      
+      // Don't use more columns than items
+      crossAxisCount = crossAxisCount > itemCount ? itemCount : crossAxisCount;
     }
 
     debugPrint(
-      'Screen width: $width, Cross axis count: $crossAxisCount, isWeb: $kIsWeb',
+      'Screen width: $width, Items: $itemCount, Cross axis count: $crossAxisCount, isWeb: $kIsWeb',
     );
     return crossAxisCount;
   }
