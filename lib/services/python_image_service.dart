@@ -7,11 +7,11 @@ import '../models/image_analysis.dart';
 /// Service to call Python backend for image analysis
 /// This allows testing Python implementation alongside Flutter implementation
 class PythonImageService {
-  // Use environment variable or default to localhost for development
+  // Use environment variable or default to Render API
   static const String _baseUrl = String.fromEnvironment(
     'API_URL',
     defaultValue: kIsWeb
-        ? '/api' // Relative path for production (same domain)
+        ? 'https://uvsn-flutter-python-api.onrender.com/api' // Render production
         : 'http://localhost:3000/api', // Local development
   );
 
