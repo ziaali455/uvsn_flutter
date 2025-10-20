@@ -98,10 +98,14 @@ class PythonImageService {
   /// Check if Python API is available
   static Future<bool> isApiAvailable() async {
     try {
-      final uri = Uri.parse(_baseUrl);
+      // Check the root endpoint, not /api
+      final baseUri = _baseUrl.replaceAll('/api', '');
+      final uri = Uri.parse(baseUri);
+      debugPrint('Checking Python API at: $uri');
       final response = await http.get(uri).timeout(
-            const Duration(seconds: 5),
-          );
+        const Duration(seconds: 10),
+      );
+      debugPrint('Python API response: ${response.statusCode}');
       return response.statusCode == 200;
     } catch (e) {
       debugPrint('Python API not available: $e');
