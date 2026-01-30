@@ -1,8 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import '../services/raw_camera_service.dart';
 import '../services/unified_image_service.dart';
-import '../models/image_analysis.dart';
+import '../services/python_image_service.dart';
 
 class RawCameraScreen extends StatefulWidget {
   const RawCameraScreen({Key? key}) : super(key: key);
@@ -113,20 +115,84 @@ class _RawCameraScreenState extends State<RawCameraScreen> {
       );
 
       if (filePath != null) {
-        _showSuccess('RAW image captured: $filePath');
-        // Here you could automatically analyze the captured image
-        // final analysis = await UnifiedImageService.analyzeImageFromFile(filePath);
-        // Navigator.pop(context, analysis);
+        _showSuccess('RAW image captured! Analyzing...');
+
+        // Analyze the captured RAW image
+        await _analyzeAndReturn(filePath);
       } else {
         _showError('Failed to capture RAW image');
+        setState(() {
+          _isCapturing = false;
+        });
       }
     } catch (e) {
       _showError('Capture error: $e');
-    } finally {
       setState(() {
         _isCapturing = false;
       });
     }
+  }
+
+  Future<void> _analyzeAndReturn(String filePath) async {
+    try {
+      // Read the RAW file
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('Captured file not found: $filePath');
+      }
+
+      final bytes = await file.readAsBytes();
+      final fileName = filePath.split('/').last;
+      final fileSize = await file.length();
+
+      debugPrint(
+          '📸 Analyzing RAW capture: $fileName (${_formatFileSize(fileSize)})');
+
+      // Prefer Python API for RAW files (better RAW support)
+      final pythonApiAvailable = await PythonImageService.isApiAvailable();
+
+      final analysis = pythonApiAvailable
+          ? await PythonImageService.analyzeImageFromBytes(
+              bytes,
+              fileName,
+              fileSize,
+              onProgress: (progress, status) {
+                debugPrint(
+                    '🐍 Python API progress: ${(progress * 100).toStringAsFixed(0)}% - $status');
+              },
+            )
+          : await UnifiedImageService.analyzeImageFromBytes(
+              bytes,
+              fileName,
+              fileSize,
+              onProgress: (progress, status) {
+                debugPrint(
+                    '📱 Flutter analysis progress: ${(progress * 100).toStringAsFixed(0)}% - $status');
+              },
+            );
+
+      debugPrint('✅ RAW analysis complete!');
+
+      // Return the analysis to the main screen
+      if (mounted) {
+        Navigator.pop(context, analysis);
+      }
+    } catch (e) {
+      debugPrint('❌ Failed to analyze RAW image: $e');
+      _showError('Failed to analyze RAW image: $e');
+      setState(() {
+        _isCapturing = false;
+      });
+    }
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
   void _showError(String message) {
@@ -189,6 +255,28 @@ class _RawCameraScreenState extends State<RawCameraScreen> {
   Widget _buildCameraInterface() {
     return Column(
       children: [
+        // Info banner about Python API
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          color: Colors.blue.shade100,
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.blue.shade800, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'RAW images are analyzed with Python API for best results',
+                  style: TextStyle(
+                    color: Colors.blue.shade800,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
         // Camera preview placeholder
         Expanded(
           flex: 3,
@@ -308,7 +396,7 @@ class _RawCameraScreenState extends State<RawCameraScreen> {
     final maxISO = (_cameraCapabilities['maxISO'] as num?)?.toDouble() ?? 3200;
     final minExposure =
         (_cameraCapabilities['minExposureDuration'] as num?)?.toDouble() ??
-        1.0 / 8000;
+            1.0 / 8000;
     final maxExposure =
         (_cameraCapabilities['maxExposureDuration'] as num?)?.toDouble() ?? 1.0;
 

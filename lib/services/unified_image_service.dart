@@ -1,10 +1,12 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:exif/exif.dart';
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import '../models/image_analysis.dart';
 import 'photographic_calculations.dart';
 import 'exif_adapter.dart';
@@ -44,8 +46,28 @@ class UnifiedImageService {
 
       // No timeout - let it process completely for accurate results
       onProgress?.call(0.0, 'Starting analysis...');
+
+      // Save the image to a temporary location so we can display it later
+      String? savedPath;
+      if (!kIsWeb) {
+        try {
+          final tempDir = await getTemporaryDirectory();
+          final timestamp = DateTime.now().millisecondsSinceEpoch;
+          final sanitizedFileName =
+              fileName.replaceAll(RegExp(r'[^\w\s\-\.]'), '_');
+          savedPath =
+              path.join(tempDir.path, '${timestamp}_$sanitizedFileName');
+          final file = File(savedPath);
+          await file.writeAsBytes(bytes);
+          debugPrint('Saved image to: $savedPath');
+        } catch (e) {
+          debugPrint('Failed to save image for preview: $e');
+          savedPath = null;
+        }
+      }
+
       return await _performAnalysis(bytes, fileName, fileSize,
-          onProgress: onProgress);
+          savedPath: savedPath, onProgress: onProgress);
     } catch (e) {
       // Check if this is a compression type 7 issue and provide helpful error message
       if (e.toString().contains('Unsupported Compression Type: 7')) {
@@ -66,6 +88,7 @@ class UnifiedImageService {
     Uint8List bytes,
     String fileName,
     int fileSize, {
+    String? savedPath,
     Function(double progress, String status)? onProgress,
   }) async {
     // Extract EXIF data
@@ -86,17 +109,22 @@ class UnifiedImageService {
       exifData,
     );
 
+    // Generate thumbnail for preview
+    onProgress?.call(0.98, 'Generating preview...');
+    final thumbnailBase64 = await _generateThumbnail(bytes);
+
     onProgress?.call(1.0, 'Analysis complete!');
 
     // Brief pause to show completion
     await Future.delayed(const Duration(milliseconds: 500));
 
     return ImageAnalysis(
-      imagePath: fileName, // Use filename as path
+      imagePath: savedPath ??
+          fileName, // Use saved path if available, otherwise filename
       fileName: fileName,
-      meanRed: rgbValues['red'] ?? 0.0,
-      meanGreen: rgbValues['green'] ?? 0.0,
-      meanBlue: rgbValues['blue'] ?? 0.0,
+      meanRed: (rgbValues['red'] as num?)?.toDouble() ?? 0.0,
+      meanGreen: (rgbValues['green'] as num?)?.toDouble() ?? 0.0,
+      meanBlue: (rgbValues['blue'] as num?)?.toDouble() ?? 0.0,
       meanRChromaticity: chromaticityValues['meanRChromaticity'] ?? 0.0,
       meanGChromaticity: chromaticityValues['meanGChromaticity'] ?? 0.0,
       stdRChromaticity: chromaticityValues['stdRChromaticity'] ?? 0.0,
@@ -108,10 +136,13 @@ class UnifiedImageService {
       analysisDate: DateTime.now(),
       fileSize: _formatFileSize(fileSize),
       imageFormat: _getFileExtension(fileName),
+      imageWidth: (rgbValues['width'] as num?)?.toInt(),
+      imageHeight: (rgbValues['height'] as num?)?.toInt(),
       sV: photographicValues['sV'],
       aV: photographicValues['aV'],
       tV: photographicValues['tV'],
       bV: photographicValues['bV'],
+      thumbnailBase64: thumbnailBase64,
     );
   }
 
@@ -132,12 +163,15 @@ class UnifiedImageService {
         exifData,
       );
 
+      // Generate thumbnail for preview
+      final thumbnailBase64 = await _generateThumbnail(bytes);
+
       return ImageAnalysis(
         imagePath: imagePath,
         fileName: fileName,
-        meanRed: rgbValues['red'] ?? 0.0,
-        meanGreen: rgbValues['green'] ?? 0.0,
-        meanBlue: rgbValues['blue'] ?? 0.0,
+        meanRed: (rgbValues['red'] as num?)?.toDouble() ?? 0.0,
+        meanGreen: (rgbValues['green'] as num?)?.toDouble() ?? 0.0,
+        meanBlue: (rgbValues['blue'] as num?)?.toDouble() ?? 0.0,
         meanRChromaticity: chromaticityValues['meanRChromaticity'] ?? 0.0,
         meanGChromaticity: chromaticityValues['meanGChromaticity'] ?? 0.0,
         stdRChromaticity: chromaticityValues['stdRChromaticity'] ?? 0.0,
@@ -149,17 +183,20 @@ class UnifiedImageService {
         analysisDate: DateTime.now(),
         fileSize: _formatFileSize(fileSize),
         imageFormat: format,
+        imageWidth: (rgbValues['width'] as num?)?.toInt(),
+        imageHeight: (rgbValues['height'] as num?)?.toInt(),
         sV: photographicValues['sV'],
         aV: photographicValues['aV'],
         tV: photographicValues['tV'],
         bV: photographicValues['bV'],
+        thumbnailBase64: thumbnailBase64,
       );
     } catch (e) {
       throw Exception('Failed to analyze image: $e');
     }
   }
 
-  static Future<Map<String, double>> _calculateMeanRGB(
+  static Future<Map<String, dynamic>> _calculateMeanRGB(
     Uint8List bytes, {
     Function(double progress, String status)? onProgress,
   }) async {
@@ -263,13 +300,21 @@ class UnifiedImageService {
           '✅ COMPLETED: Processed all $pixelCount pixels (${image.width}x${image.height})');
 
       if (pixelCount == 0) {
-        return {'red': 0.0, 'green': 0.0, 'blue': 0.0};
+        return {
+          'red': 0.0,
+          'green': 0.0,
+          'blue': 0.0,
+          'width': image.width,
+          'height': image.height,
+        };
       }
 
       return {
         'red': totalRed / pixelCount,
         'green': totalGreen / pixelCount,
         'blue': totalBlue / pixelCount,
+        'width': image.width,
+        'height': image.height,
       };
     } catch (e) {
       throw Exception('Failed to calculate RGB values: $e');
@@ -968,6 +1013,54 @@ class UnifiedImageService {
       return parts.last.toLowerCase();
     }
     return 'unknown';
+  }
+
+  /// Generate a thumbnail for preview (max 200x200)
+  static Future<String?> _generateThumbnail(Uint8List bytes) async {
+    try {
+      debugPrint('Generating thumbnail...');
+      
+      // Decode the image
+      final image = await _decodeImageWithFallbacks(bytes);
+      if (image == null) {
+        debugPrint('Failed to decode image for thumbnail');
+        return null;
+      }
+
+      // Calculate thumbnail size (max 200x200, maintain aspect ratio)
+      const maxSize = 200;
+      int thumbnailWidth;
+      int thumbnailHeight;
+      
+      if (image.width > image.height) {
+        thumbnailWidth = maxSize;
+        thumbnailHeight = (maxSize * image.height / image.width).round();
+      } else {
+        thumbnailHeight = maxSize;
+        thumbnailWidth = (maxSize * image.width / image.height).round();
+      }
+
+      // Resize image
+      final thumbnail = img.copyResize(
+        image,
+        width: thumbnailWidth,
+        height: thumbnailHeight,
+        interpolation: img.Interpolation.linear,
+      );
+
+      // Encode as JPEG with decent quality
+      final thumbnailBytes = img.encodeJpg(thumbnail, quality: 85);
+      
+      // Convert to base64
+      final base64Thumbnail = base64Encode(thumbnailBytes);
+      
+      debugPrint('Thumbnail generated: ${thumbnailWidth}x${thumbnailHeight}, ${thumbnailBytes.length} bytes');
+      
+      return base64Thumbnail;
+    } catch (e) {
+      debugPrint('Failed to generate thumbnail: $e');
+      return null;
+    }
   }
 
   static Future<List<ImageAnalysis>> analyzeMultipleImages(

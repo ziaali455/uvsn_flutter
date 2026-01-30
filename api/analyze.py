@@ -362,6 +362,8 @@ async def analyze_image(file: UploadFile = File(...)):
             "analysisDate": datetime.now().isoformat(),
             "fileSize": file_size_str,
             "imageFormat": file_extension,
+            "imageWidth": img.size[0],  # Actual pixel width
+            "imageHeight": img.size[1],  # Actual pixel height
             "sV": photographic_values['sV'],
             "aV": photographic_values['aV'],
             "tV": photographic_values['tV'],

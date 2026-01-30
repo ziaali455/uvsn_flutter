@@ -57,5 +57,20 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	
+	<!-- Google Sign-In Configuration -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.843540546414-kd8jb440kcgovhf4p94tsl7pri8sre8d</string>
+			</array>
+		</dict>
+	</array>
+	<key>GIDClientID</key>
+	<string>843540546414-kd8jb440kcgovhf4p94tsl7pri8sre8d.apps.googleusercontent.com</string>
 </dict>
 </plist>

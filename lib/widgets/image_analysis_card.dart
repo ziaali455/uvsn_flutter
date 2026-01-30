@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:io';
 import '../models/image_analysis.dart';
-import 'lamp_condition_selector.dart';
 
 class ImageAnalysisCard extends StatelessWidget {
   final ImageAnalysis analysis;
   final VoidCallback? onExport;
   final VoidCallback? onDelete;
   final VoidCallback? onSelectLampCondition;
+  final VoidCallback? onAddToDataset;
+  final bool isUploadingToDataset;
 
   const ImageAnalysisCard({
     Key? key,
@@ -16,6 +17,8 @@ class ImageAnalysisCard extends StatelessWidget {
     this.onExport,
     this.onDelete,
     this.onSelectLampCondition,
+    this.onAddToDataset,
+    this.isUploadingToDataset = false,
   }) : super(key: key);
 
   @override
@@ -65,7 +68,9 @@ class ImageAnalysisCard extends StatelessWidget {
                       children: [
                         Text(
                           analysis.fileName,
-                          style: Theme.of(context).textTheme.titleMedium
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
                               ?.copyWith(fontWeight: FontWeight.w600),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -102,12 +107,37 @@ class ImageAnalysisCard extends StatelessWidget {
                             const SizedBox(width: 4),
                             Text(
                               analysis.fileSize,
-                              style: Theme.of(context).textTheme.bodySmall
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
                                   ?.copyWith(color: Colors.grey.shade600),
                             ),
                           ],
                         ),
                         const SizedBox(height: 4),
+                        // Pixel dimensions
+                        if (analysis.imageWidth != null &&
+                            analysis.imageHeight != null)
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.photo_size_select_large,
+                                size: 16,
+                                color: Colors.grey.shade600,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                '${analysis.imageWidth} × ${analysis.imageHeight} px',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: Colors.grey.shade600),
+                              ),
+                            ],
+                          ),
+                        if (analysis.imageWidth != null &&
+                            analysis.imageHeight != null)
+                          const SizedBox(height: 4),
                         Row(
                           children: [
                             Icon(
@@ -118,7 +148,9 @@ class ImageAnalysisCard extends StatelessWidget {
                             const SizedBox(width: 4),
                             Text(
                               _formatDate(analysis.analysisDate),
-                              style: Theme.of(context).textTheme.bodySmall
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
                                   ?.copyWith(color: Colors.grey.shade600),
                             ),
                           ],
@@ -156,45 +188,62 @@ class ImageAnalysisCard extends StatelessWidget {
   }
 
   Widget _buildImagePreview() {
-    if (kIsWeb) {
-      // For web, we can't display the image since we don't have a file path
-      // We'll show a placeholder with the filename
-      return Container(
-        color: Colors.grey[300],
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.image, color: Colors.grey),
-            const SizedBox(height: 4),
-            Text(
+    // Try to display thumbnail from base64 data
+    final thumbnailBytes = analysis.thumbnailBytes;
+    
+    if (thumbnailBytes != null) {
+      return Image.memory(
+        thumbnailBytes,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return _buildPlaceholder();
+        },
+      );
+    }
+    
+    // Fallback: Try to load from file path (mobile only)
+    if (!kIsWeb) {
+      try {
+        final file = File(analysis.imagePath);
+        if (file.existsSync()) {
+          return Image.file(
+            file,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) {
+              return _buildPlaceholder();
+            },
+          );
+        }
+      } catch (e) {
+        // Fall through to placeholder
+      }
+    }
+    
+    // Show placeholder if no preview available
+    return _buildPlaceholder();
+  }
+
+  Widget _buildPlaceholder() {
+    return Container(
+      color: Colors.grey[300],
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.image, color: Colors.grey, size: 32),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.all(4.0),
+            child: Text(
               analysis.fileName,
-              style: const TextStyle(fontSize: 10, color: Colors.grey),
+              style: const TextStyle(fontSize: 9, color: Colors.grey),
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-          ],
-        ),
-      );
-    } else {
-      try {
-        return Image.file(
-          File(analysis.imagePath),
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            return Container(
-              color: Colors.grey[300],
-              child: const Icon(Icons.image_not_supported, color: Colors.grey),
-            );
-          },
-        );
-      } catch (e) {
-        return Container(
-          color: Colors.grey[300],
-          child: const Icon(Icons.image_not_supported, color: Colors.grey),
-        );
-      }
-    }
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildRGBSection(BuildContext context) {
@@ -567,6 +616,27 @@ class ImageAnalysisCard extends StatelessWidget {
             style: OutlinedButton.styleFrom(
               foregroundColor: Theme.of(context).colorScheme.primary,
               side: BorderSide(color: Theme.of(context).colorScheme.primary),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+          ),
+        // Add to Dataset button
+        if (onAddToDataset != null)
+          ElevatedButton.icon(
+            onPressed: isUploadingToDataset ? null : onAddToDataset,
+            icon: isUploadingToDataset
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : const Icon(Icons.cloud_upload, size: 16),
+            label: Text(isUploadingToDataset ? 'Uploading...' : 'Add to Dataset'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF4285F4), // Google blue
+              foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             ),
           ),

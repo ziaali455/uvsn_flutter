@@ -263,28 +263,54 @@ private class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     }
     
     private func saveImageToPhotos(imageData: Data, completion: @escaping (String?) -> Void) {
-        PHPhotoLibrary.requestAuthorization { status in
-            guard status == .authorized else {
-                DispatchQueue.main.async {
-                    completion(nil)
-                }
-                return
+        // Save to temporary directory first so we can access it for analysis
+        let timestamp = Date().timeIntervalSince1970
+        let fileName = "raw_capture_\(timestamp).dng"
+        
+        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            DispatchQueue.main.async {
+                completion(nil)
             }
+            return
+        }
+        
+        let fileURL = documentsDirectory.appendingPathComponent(fileName)
+        
+        do {
+            try imageData.write(to: fileURL)
+            print("✅ RAW file saved to: \(fileURL.path)")
             
-            PHPhotoLibrary.shared().performChanges({
-                let creationRequest = PHAssetCreationRequest.forAsset()
-                creationRequest.addResource(with: .photo, data: imageData, options: nil)
-            }) { success, error in
-                DispatchQueue.main.async {
+            // Also save to Photos library for user convenience (async, don't block on this)
+            PHPhotoLibrary.requestAuthorization { status in
+                guard status == .authorized else { return }
+                
+                PHPhotoLibrary.shared().performChanges({
+                    let creationRequest = PHAssetCreationRequest.forAsset()
+                    creationRequest.addResource(with: .photo, data: imageData, options: nil)
+                }) { success, error in
                     if success {
-                        // For now, return a placeholder path - in a real implementation,
-                        // you'd want to get the actual file path from the Photos library
-                        completion("photo_library://raw_image_\(Date().timeIntervalSince1970)")
-                    } else {
-                        completion(nil)
+                        print("✅ RAW image also saved to Photos library")
+                    } else if let error = error {
+                        print("⚠️ Failed to save to Photos library: \(error.localizedDescription)")
                     }
                 }
+            }
+            
+            // Return the file path immediately
+            DispatchQueue.main.async {
+                completion(fileURL.path)
+            }
+        } catch {
+            print("❌ Failed to save RAW file: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                completion(nil)
             }
         }
     }
 }
+
+
+
+
+
+

@@ -8,6 +8,7 @@ import '../services/unified_image_service.dart';
 import '../services/python_image_service.dart';
 import '../services/unified_export_service.dart';
 import '../services/raw_camera_service.dart';
+import '../services/google_drive_service.dart';
 import '../widgets/image_analysis_card.dart';
 import '../services/photographic_calculations.dart';
 import 'raw_camera_screen.dart';
@@ -27,11 +28,25 @@ class _MainScreenState extends State<MainScreen> {
   String _analysisStatus = '';
   bool _usePythonApi = false; // Toggle between Flutter and Python processing
   bool? _pythonApiAvailable;
+  
+  // Google Drive state
+  Set<int> _uploadingIndices = {};
+  bool _isSignedInToGoogle = false;
 
   @override
   void initState() {
     super.initState();
     _checkPythonApiAvailability();
+    _checkGoogleSignIn();
+  }
+
+  Future<void> _checkGoogleSignIn() async {
+    final signedIn = await GoogleDriveService.isSignedIn();
+    if (mounted) {
+      setState(() {
+        _isSignedInToGoogle = signedIn;
+      });
+    }
   }
 
   Future<void> _checkPythonApiAvailability() async {
@@ -111,6 +126,24 @@ class _MainScreenState extends State<MainScreen> {
                 ),
               ),
             ),
+          // Google account indicator
+          if (_isSignedInToGoogle)
+            Tooltip(
+              message: 'Signed in to Google Drive',
+              child: Container(
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4285F4).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.cloud_done,
+                  color: Color(0xFF4285F4),
+                  size: 20,
+                ),
+              ),
+            ),
           if (_analyses.isNotEmpty)
             Container(
               margin: const EdgeInsets.only(right: 16),
@@ -134,6 +167,20 @@ class _MainScreenState extends State<MainScreen> {
                       ],
                     ),
                   ),
+                  const PopupMenuItem(
+                    value: 'add_all_to_dataset',
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.cloud_upload,
+                          color: Color(0xFF4285F4),
+                        ),
+                        SizedBox(width: 12),
+                        Text('Add All to Dataset'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuDivider(),
                   PopupMenuItem(
                     value: 'clear_all',
                     child: Row(
@@ -448,6 +495,8 @@ class _MainScreenState extends State<MainScreen> {
                       onDelete: () => _deleteAnalysis(index),
                       onSelectLampCondition: () =>
                           _selectLampCondition(analysis),
+                      onAddToDataset: () => _addToDataset(analysis, index),
+                      isUploadingToDataset: _uploadingIndices.contains(index),
                     );
                   },
                 );
@@ -488,7 +537,7 @@ class _MainScreenState extends State<MainScreen> {
         crossAxisCount = 2;
       else
         crossAxisCount = 1;
-      
+
       // Don't use more columns than items
       crossAxisCount = crossAxisCount > itemCount ? itemCount : crossAxisCount;
     } else {
@@ -501,7 +550,7 @@ class _MainScreenState extends State<MainScreen> {
         crossAxisCount = 2;
       else
         crossAxisCount = 1;
-      
+
       // Don't use more columns than items
       crossAxisCount = crossAxisCount > itemCount ? itemCount : crossAxisCount;
     }
@@ -753,6 +802,68 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  Future<void> _addToDataset(ImageAnalysis analysis, int index) async {
+    try {
+      // Check if signed in, if not, prompt sign in
+      if (!_isSignedInToGoogle) {
+        final account = await GoogleDriveService.signIn();
+        if (account == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Google Sign-In cancelled'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          return;
+        }
+        setState(() {
+          _isSignedInToGoogle = true;
+        });
+      }
+
+      // Mark as uploading
+      setState(() {
+        _uploadingIndices.add(index);
+      });
+
+      // Upload to Google Drive
+      final result = await GoogleDriveService.uploadAnalysis(analysis);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.cloud_done, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text(result)),
+              ],
+            ),
+            backgroundColor: const Color(0xFF4285F4),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add to dataset: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingIndices.remove(index);
+        });
+      }
+    }
+  }
+
   Future<void> _selectLampCondition(ImageAnalysis analysis) async {
     final selectedCondition = await showDialog<String>(
       context: context,
@@ -809,11 +920,14 @@ class _MainScreenState extends State<MainScreen> {
         analysisDate: analysis.analysisDate,
         fileSize: analysis.fileSize,
         imageFormat: analysis.imageFormat,
+        imageWidth: analysis.imageWidth,
+        imageHeight: analysis.imageHeight,
         lampCondition: selectedCondition,
         sV: analysis.sV,
         aV: analysis.aV,
         tV: analysis.tV,
         bV: analysis.bV,
+        thumbnailBase64: analysis.thumbnailBase64, // Preserve thumbnail
       );
 
       setState(() {
@@ -862,9 +976,94 @@ class _MainScreenState extends State<MainScreen> {
       case 'export_all':
         _exportAll();
         break;
+      case 'add_all_to_dataset':
+        _addAllToDataset();
+        break;
       case 'clear_all':
         _clearAll();
         break;
+    }
+  }
+
+  Future<void> _addAllToDataset() async {
+    try {
+      // Check if signed in, if not, prompt sign in
+      if (!_isSignedInToGoogle) {
+        final account = await GoogleDriveService.signIn();
+        if (account == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Google Sign-In cancelled'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          return;
+        }
+        setState(() {
+          _isSignedInToGoogle = true;
+        });
+      }
+
+      // Show progress dialog
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4285F4)),
+                ),
+                const SizedBox(height: 16),
+                Text('Uploading ${_analyses.length} files to Google Drive...'),
+              ],
+            ),
+          ),
+        );
+      }
+
+      // Upload all analyses
+      final result = await GoogleDriveService.uploadBulkAnalyses(
+        _analyses,
+        onProgress: (current, total) {
+          debugPrint('Uploaded $current/$total');
+        },
+      );
+
+      // Close progress dialog
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.cloud_done, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text(result)),
+              ],
+            ),
+            backgroundColor: const Color(0xFF4285F4),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      // Close progress dialog if open
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add to dataset: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

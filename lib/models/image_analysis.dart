@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 class ImageAnalysis {
   final String imagePath;
@@ -17,6 +18,10 @@ class ImageAnalysis {
   final DateTime analysisDate;
   final String fileSize;
   final String imageFormat;
+  
+  // Actual image pixel dimensions
+  final int? imageWidth;
+  final int? imageHeight;
 
   // Lamp condition (user selected)
   final String? lampCondition;
@@ -26,6 +31,9 @@ class ImageAnalysis {
   final double? aV;
   final double? tV;
   final double? bV;
+
+  // Thumbnail for preview (base64 encoded)
+  final String? thumbnailBase64;
 
   ImageAnalysis({
     required this.imagePath,
@@ -44,12 +52,25 @@ class ImageAnalysis {
     required this.analysisDate,
     required this.fileSize,
     required this.imageFormat,
+    this.imageWidth,
+    this.imageHeight,
     this.lampCondition,
     this.sV,
     this.aV,
     this.tV,
     this.bV,
+    this.thumbnailBase64,
   });
+
+  // Helper to get thumbnail bytes from base64
+  Uint8List? get thumbnailBytes {
+    if (thumbnailBase64 == null) return null;
+    try {
+      return base64Decode(thumbnailBase64!);
+    } catch (e) {
+      return null;
+    }
+  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -69,11 +90,14 @@ class ImageAnalysis {
       'analysisDate': analysisDate.toIso8601String(),
       'fileSize': fileSize,
       'imageFormat': imageFormat,
+      'imageWidth': imageWidth,
+      'imageHeight': imageHeight,
       'lampCondition': lampCondition,
       'sV': sV,
       'aV': aV,
       'tV': tV,
       'bV': bV,
+      'thumbnailBase64': thumbnailBase64,
     };
   }
 
@@ -95,11 +119,14 @@ class ImageAnalysis {
       analysisDate: DateTime.parse(json['analysisDate']),
       fileSize: json['fileSize'],
       imageFormat: json['imageFormat'],
+      imageWidth: json['imageWidth']?.toInt(),
+      imageHeight: json['imageHeight']?.toInt(),
       lampCondition: json['lampCondition'],
       sV: json['sV']?.toDouble(),
       aV: json['aV']?.toDouble(),
       tV: json['tV']?.toDouble(),
       bV: json['bV']?.toDouble(),
+      thumbnailBase64: json['thumbnailBase64'],
     );
   }
 
