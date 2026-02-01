@@ -18,6 +18,33 @@ import gc  # Garbage collection for memory management
 
 app = FastAPI()
 
+
+class NumpyImageWrapper:
+    """
+    Wrapper class that makes a numpy array behave like a PIL Image
+    This preserves 16-bit data that PIL would otherwise convert to 8-bit
+    """
+    def __init__(self, array: np.ndarray):
+        self._array = array
+        self._mode = 'RGB16' if array.dtype == np.uint16 else 'RGB'
+    
+    @property
+    def size(self):
+        """Returns (width, height) like PIL"""
+        return (self._array.shape[1], self._array.shape[0])
+    
+    @property
+    def mode(self):
+        return self._mode
+    
+    def convert(self, mode):
+        """Dummy convert - we're already RGB"""
+        return self
+    
+    def __array__(self):
+        """Allow np.array(wrapper) to work"""
+        return self._array
+
 # Enable CORS for Flutter web app
 app.add_middleware(
     CORSMiddleware,
@@ -99,45 +126,54 @@ class ImageAnalyzer:
             try:
                 print(f"=== Attempting RAW decode for {filename} ===")
                 with rawpy.imread(io.BytesIO(file_bytes)) as raw:
-                    # Extract RGB image from RAW - 16-bit for maximum precision
+                    # Extract RGB image from RAW - MATLAB-compatible settings
+                    # This matches MATLAB's rawread() + demosaic() behavior
                     rgb = raw.postprocess(
-                        output_bps=16,          # 16-bit output for full precision
-                        use_camera_wb=True,     # Use camera white balance
-                        no_auto_bright=False,   # Allow auto brightness
-                        half_size=False,        # Process full resolution (required)
+                        output_bps=16,              # 16-bit output for full precision
+                        use_camera_wb=False,        # NO white balance (like MATLAB)
+                        use_auto_wb=False,          # NO auto white balance
+                        no_auto_bright=True,        # NO auto brightness scaling
+                        output_color=rawpy.ColorSpace.raw,  # NO color matrix (raw sensor colors)
+                        gamma=(1, 1),               # Linear gamma (no gamma correction)
+                        half_size=False,            # Process full resolution
                     )
-                    img = Image.fromarray(rgb)
-                    print(f"✅ SUCCESS: RAW decoder worked (16-bit)")
-                    print(f"RAW dimensions: {img.size}, mode: {img.mode}")
-                    return img
+                    print(f"✅ SUCCESS: RAW decoder worked (16-bit, MATLAB-compatible)")
+                    print(f"RAW array shape: {rgb.shape}, dtype: {rgb.dtype}")
+                    print(f"RAW value range: {rgb.min()} - {rgb.max()}")
+                    
+                    # Return as a wrapper that mimics PIL Image interface
+                    return NumpyImageWrapper(rgb)
             except Exception as e:
                 print(f"❌ RAW decoder failed: {e}")
         
         raise Exception(f"Failed to decode image - format may not be supported or file may be corrupted")
     
     @staticmethod
-    def calculate_mean_rgb(img: Image.Image) -> Dict[str, float]:
+    def calculate_mean_rgb(img) -> Dict[str, float]:
         """
         Calculate mean RGB values - MEMORY OPTIMIZED
-        Supports both 8-bit and 16-bit images
+        Supports PIL Image, NumpyImageWrapper, and both 8-bit and 16-bit images
         Processes every pixel but uses row-by-row streaming to minimize RAM
         """
-        # Convert to RGB if needed (preserves bit depth)
-        if img.mode == 'I;16':
-            # 16-bit grayscale - convert to RGB
-            img = img.convert('RGB')
-        elif img.mode not in ('RGB', 'I;16B'):
-            img = img.convert('RGB')
+        # Get image as numpy array (works for both PIL and NumpyImageWrapper)
+        if isinstance(img, NumpyImageWrapper):
+            img_array = np.array(img)
+        else:
+            # PIL Image - convert to RGB if needed
+            if img.mode == 'I;16':
+                img = img.convert('RGB')
+            elif img.mode not in ('RGB', 'I;16B', 'RGB16'):
+                img = img.convert('RGB')
+            img_array = np.array(img)
         
-        width, height = img.size
+        height, width = img_array.shape[:2]
         total_pixels = height * width
         
-        # Detect bit depth from image
-        img_array = np.array(img)
+        # Detect bit depth from array dtype
         bit_depth = 16 if img_array.dtype == np.uint16 else 8
         
         print(f"Image dimensions: {width}x{height} ({total_pixels} total pixels)")
-        print(f"🎨 Bit depth: {bit_depth}-bit")
+        print(f"🎨 Bit depth: {bit_depth}-bit (dtype: {img_array.dtype})")
         print(f"🧠 Using memory-optimized row-by-row processing")
         
         # Process row by row to minimize memory usage
@@ -168,24 +204,28 @@ class ImageAnalyzer:
         }
     
     @staticmethod
-    def calculate_chromaticity_values(img: Image.Image) -> Dict[str, float]:
+    def calculate_chromaticity_values(img) -> Dict[str, float]:
         """
         Calculate chromaticity values - MEMORY OPTIMIZED
-        Supports both 8-bit and 16-bit images
+        Supports PIL Image, NumpyImageWrapper, and both 8-bit and 16-bit images
         Uses streaming/online statistics to avoid storing all chromaticity values
         Processes every pixel but keeps memory under control
         """
-        # Convert to RGB if needed (preserves bit depth)
-        if img.mode == 'I;16':
-            img = img.convert('RGB')
-        elif img.mode not in ('RGB', 'I;16B'):
-            img = img.convert('RGB')
+        # Get image as numpy array (works for both PIL and NumpyImageWrapper)
+        if isinstance(img, NumpyImageWrapper):
+            img_array = np.array(img)
+        else:
+            # PIL Image - convert to RGB if needed
+            if img.mode == 'I;16':
+                img = img.convert('RGB')
+            elif img.mode not in ('RGB', 'I;16B', 'RGB16'):
+                img = img.convert('RGB')
+            img_array = np.array(img)
         
-        width, height = img.size
+        height, width = img_array.shape[:2]
         total_pixels = height * width
         
-        # Load image array once (keeps native dtype - uint8 or uint16)
-        img_array = np.array(img)
+        # Detect bit depth from array dtype
         bit_depth = 16 if img_array.dtype == np.uint16 else 8
         max_value = 65535.0 if bit_depth == 16 else 255.0
         
