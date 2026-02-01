@@ -273,20 +273,17 @@ class ImageAnalyzer:
         """
         Decode image with fallbacks for RAW formats
         Replicates _decodeImageWithFallbacks from Flutter
-        """
-        # Try standard image formats first
-        try:
-            img = Image.open(io.BytesIO(file_bytes))
-            print(f"✅ SUCCESS: Standard decoder worked for {filename}")
-            print(f"Image dimensions: {img.size}")
-            return img
-        except Exception as e:
-            print(f"❌ Standard decoder failed: {e}")
         
-        # Try RAW format if standard fails
-        if filename.lower().endswith(('.dng', '.raw', '.cr2', '.nef', '.arw', '.rw2')):
+        IMPORTANT: RAW files (DNG, CR2, etc.) are processed FIRST with MATLAB-compatible
+        decoder to get true sensor data, NOT the embedded JPEG preview!
+        """
+        # Check if this is a RAW file - process with MATLAB-compatible decoder FIRST
+        # (PIL would read the embedded JPEG thumbnail, not the actual sensor data!)
+        raw_extensions = ('.dng', '.raw', '.cr2', '.nef', '.arw', '.rw2', '.orf', '.pef')
+        if filename.lower().endswith(raw_extensions):
             try:
-                print(f"=== Attempting MATLAB-compatible RAW decode for {filename} ===")
+                print(f"=== RAW file detected: {filename} ===")
+                print(f"=== Using MATLAB-compatible RAW decode (not JPEG preview) ===")
                 rgb = ImageAnalyzer.matlab_compatible_raw_decode(file_bytes)
                 print(f"✅ SUCCESS: MATLAB-compatible RAW decode")
                 print(f"RGB array shape: {rgb.shape}, dtype: {rgb.dtype}")
@@ -294,7 +291,7 @@ class ImageAnalyzer:
                 return NumpyImageWrapper(rgb)
             except Exception as e:
                 print(f"❌ MATLAB-compatible RAW decoder failed: {e}")
-                # Fallback to rawpy postprocess
+                # Fallback to rawpy postprocess (still better than JPEG preview)
                 try:
                     print(f"=== Falling back to rawpy postprocess ===")
                     with rawpy.imread(io.BytesIO(file_bytes)) as raw:
@@ -307,9 +304,20 @@ class ImageAnalyzer:
                             gamma=(1, 1),
                             half_size=False,
                         )
+                        print(f"✅ SUCCESS: rawpy postprocess fallback")
                         return NumpyImageWrapper(rgb)
                 except Exception as e2:
-                    print(f"❌ Fallback also failed: {e2}")
+                    print(f"❌ rawpy fallback also failed: {e2}")
+                    raise Exception(f"Failed to decode RAW file: {e}, fallback: {e2}")
+        
+        # For non-RAW files, use PIL (standard image formats)
+        try:
+            img = Image.open(io.BytesIO(file_bytes))
+            print(f"✅ SUCCESS: PIL decoder worked for {filename}")
+            print(f"Image dimensions: {img.size}, mode: {img.mode}")
+            return img
+        except Exception as e:
+            print(f"❌ PIL decoder failed: {e}")
         
         raise Exception(f"Failed to decode image - format may not be supported or file may be corrupted")
     
