@@ -99,17 +99,16 @@ class ImageAnalyzer:
             try:
                 print(f"=== Attempting RAW decode for {filename} ===")
                 with rawpy.imread(io.BytesIO(file_bytes)) as raw:
-                    # Extract RGB image from RAW with memory-optimized settings
-                    # Use 8-bit output to save memory (16-bit doubles memory usage)
+                    # Extract RGB image from RAW - 16-bit for maximum precision
                     rgb = raw.postprocess(
-                        output_bps=8,           # 8-bit output (saves 50% memory vs 16-bit)
+                        output_bps=16,          # 16-bit output for full precision
                         use_camera_wb=True,     # Use camera white balance
                         no_auto_bright=False,   # Allow auto brightness
                         half_size=False,        # Process full resolution (required)
                     )
                     img = Image.fromarray(rgb)
-                    print(f"✅ SUCCESS: RAW decoder worked (8-bit, memory optimized)")
-                    print(f"RAW dimensions: {img.size}")
+                    print(f"✅ SUCCESS: RAW decoder worked (16-bit)")
+                    print(f"RAW dimensions: {img.size}, mode: {img.mode}")
                     return img
             except Exception as e:
                 print(f"❌ RAW decoder failed: {e}")
@@ -120,30 +119,35 @@ class ImageAnalyzer:
     def calculate_mean_rgb(img: Image.Image) -> Dict[str, float]:
         """
         Calculate mean RGB values - MEMORY OPTIMIZED
+        Supports both 8-bit and 16-bit images
         Processes every pixel but uses row-by-row streaming to minimize RAM
         """
-        # Convert to RGB if needed
-        if img.mode != 'RGB':
+        # Convert to RGB if needed (preserves bit depth)
+        if img.mode == 'I;16':
+            # 16-bit grayscale - convert to RGB
+            img = img.convert('RGB')
+        elif img.mode not in ('RGB', 'I;16B'):
             img = img.convert('RGB')
         
         width, height = img.size
         total_pixels = height * width
         
+        # Detect bit depth from image
+        img_array = np.array(img)
+        bit_depth = 16 if img_array.dtype == np.uint16 else 8
+        
         print(f"Image dimensions: {width}x{height} ({total_pixels} total pixels)")
+        print(f"🎨 Bit depth: {bit_depth}-bit")
         print(f"🧠 Using memory-optimized row-by-row processing")
         
         # Process row by row to minimize memory usage
-        # Instead of loading entire image as float64 array
         sum_red = 0.0
         sum_green = 0.0
         sum_blue = 0.0
         
-        # Get image data as bytes and process in chunks
-        img_array = np.array(img, dtype=np.uint8)  # uint8 uses 1/8 the memory of float64
-        
-        # Process each row
+        # Process each row (keeps only one row as float64 at a time)
         for y in range(height):
-            row = img_array[y].astype(np.float32)  # Convert one row at a time
+            row = img_array[y].astype(np.float64)  # Convert one row at a time
             sum_red += np.sum(row[:, 0])
             sum_green += np.sum(row[:, 1])
             sum_blue += np.sum(row[:, 2])
@@ -154,7 +158,8 @@ class ImageAnalyzer:
         mean_green = sum_green / total_pixels
         mean_blue = sum_blue / total_pixels
         
-        print(f"✅ COMPLETED: Processed all {total_pixels} pixels")
+        print(f"✅ COMPLETED: Processed all {total_pixels} pixels ({bit_depth}-bit)")
+        print(f"Mean RGB: R={mean_red:.2f}, G={mean_green:.2f}, B={mean_blue:.2f}")
         
         return {
             'red': float(mean_red),
@@ -166,17 +171,26 @@ class ImageAnalyzer:
     def calculate_chromaticity_values(img: Image.Image) -> Dict[str, float]:
         """
         Calculate chromaticity values - MEMORY OPTIMIZED
+        Supports both 8-bit and 16-bit images
         Uses streaming/online statistics to avoid storing all chromaticity values
         Processes every pixel but keeps memory under control
         """
-        # Convert to RGB if needed
-        if img.mode != 'RGB':
+        # Convert to RGB if needed (preserves bit depth)
+        if img.mode == 'I;16':
+            img = img.convert('RGB')
+        elif img.mode not in ('RGB', 'I;16B'):
             img = img.convert('RGB')
         
         width, height = img.size
         total_pixels = height * width
         
+        # Load image array once (keeps native dtype - uint8 or uint16)
+        img_array = np.array(img)
+        bit_depth = 16 if img_array.dtype == np.uint16 else 8
+        max_value = 65535.0 if bit_depth == 16 else 255.0
+        
         print(f"Chromaticity analysis for {width}x{height} ({total_pixels} pixels)")
+        print(f"🎨 Bit depth: {bit_depth}-bit (max value: {max_value})")
         print(f"🧠 Using memory-optimized streaming statistics")
         
         # Use Welford's online algorithm for mean and variance
@@ -191,13 +205,10 @@ class ImageAnalyzer:
         max_green = 0.0
         max_blue = 0.0
         
-        # Load image as uint8 (1/8 memory of float64)
-        img_array = np.array(img, dtype=np.uint8)
-        
         # Process row by row
         for y in range(height):
-            # Convert single row to float32 (not float64)
-            row = img_array[y].astype(np.float32)
+            # Convert single row to float64 for precision
+            row = img_array[y].astype(np.float64)
             r = row[:, 0]
             g = row[:, 1]
             b = row[:, 2]
@@ -218,7 +229,7 @@ class ImageAnalyzer:
                 r_chrom = r[valid_mask] / rgb_sum[valid_mask]
                 g_chrom = g[valid_mask] / rgb_sum[valid_mask]
                 
-                # Welford's online algorithm for each valid pixel
+                # Batch Welford's update for efficiency
                 for i in range(len(r_chrom)):
                     n += 1
                     delta_r = r_chrom[i] - mean_r
@@ -236,11 +247,11 @@ class ImageAnalyzer:
         std_r = np.sqrt(M2_r / n) if n > 1 else 0.0
         std_g = np.sqrt(M2_g / n) if n > 1 else 0.0
         
-        print(f"✅ COMPLETED: Chromaticity analysis finished")
-        print(f"Max RGB values: R={max_red}, G={max_green}, B={max_blue}")
+        print(f"✅ COMPLETED: Chromaticity analysis finished ({bit_depth}-bit)")
+        print(f"Max RGB values ({bit_depth}-bit): R={max_red}, G={max_green}, B={max_blue}")
         print(f"Chromaticity samples: {n}")
-        print(f"Chromaticity means: R={mean_r}, G={mean_g}")
-        print(f"Chromaticity std devs: R={std_r}, G={std_g}")
+        print(f"Chromaticity means: R={mean_r:.6f}, G={mean_g:.6f}")
+        print(f"Chromaticity std devs: R={std_r:.6f}, G={std_g:.6f}")
         
         return {
             'meanRChromaticity': float(mean_r),
