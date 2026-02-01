@@ -107,6 +107,168 @@ class ImageAnalyzer:
     """Replicate the Flutter UnifiedImageService chromaticity logic"""
     
     @staticmethod
+    def matlab_compatible_raw_decode(file_bytes: bytes) -> np.ndarray:
+        """
+        MATLAB-compatible RAW decoding that replicates:
+        1. cfaImage = rawread(fileName)
+        2. cfaImage = cfaImage - blackLevel
+        3. cfaImage = max(0, cfaImage)
+        4. imDebayered = demosaic(cfaImage, cfaLayout)
+        
+        Returns: RGB array in original sensor values (no scaling, no color matrix)
+        """
+        with rawpy.imread(io.BytesIO(file_bytes)) as raw:
+            # Step 1: Get raw Bayer CFA data (like MATLAB's rawread)
+            # raw_image includes black borders, raw_image_visible is the actual image area
+            cfa_image = raw.raw_image_visible.copy().astype(np.float64)
+            print(f"Raw CFA image shape: {cfa_image.shape}, dtype: {cfa_image.dtype}")
+            print(f"Raw CFA value range: {cfa_image.min()} - {cfa_image.max()}")
+            
+            # Step 2: Get and apply black level correction (like MATLAB)
+            black_levels = raw.black_level_per_channel
+            print(f"Black levels per channel: {black_levels}")
+            
+            # Get the CFA pattern (e.g., RGGB, BGGR, etc.)
+            raw_pattern = raw.raw_pattern
+            print(f"CFA pattern:\n{raw_pattern}")
+            
+            # Create black level array matching the CFA pattern
+            height, width = cfa_image.shape
+            black_level_array = np.zeros_like(cfa_image)
+            
+            # Apply black level based on CFA pattern position
+            for i in range(2):
+                for j in range(2):
+                    channel = raw_pattern[i, j]
+                    black_level_array[i::2, j::2] = black_levels[channel]
+            
+            # Subtract black level (like MATLAB: cfaImage = cfaImage - blackLevel)
+            cfa_image = cfa_image - black_level_array
+            
+            # Step 3: Clamp to 0 (like MATLAB: cfaImage = max(0, cfaImage))
+            cfa_image = np.maximum(0, cfa_image)
+            print(f"After black level correction: {cfa_image.min()} - {cfa_image.max()}")
+            
+            # Step 4: Demosaic using bilinear interpolation (like MATLAB's demosaic)
+            rgb = ImageAnalyzer.bilinear_demosaic(cfa_image, raw_pattern)
+            
+            # Keep as float64 for precision (MATLAB uses double)
+            # Convert to uint16 range for storage but preserve values
+            rgb = np.clip(rgb, 0, 65535).astype(np.uint16)
+            
+            return rgb
+    
+    @staticmethod
+    def numpy_convolve2d(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+        """Simple 2D convolution using numpy (avoids scipy dependency)"""
+        # Pad the image to handle borders (reflect mode)
+        pad_h, pad_w = kernel.shape[0] // 2, kernel.shape[1] // 2
+        padded = np.pad(image, ((pad_h, pad_h), (pad_w, pad_w)), mode='reflect')
+        
+        # Output array
+        output = np.zeros_like(image)
+        
+        # Perform convolution using sliding window
+        kh, kw = kernel.shape
+        for i in range(kh):
+            for j in range(kw):
+                if kernel[i, j] != 0:
+                    output += kernel[i, j] * padded[i:i+image.shape[0], j:j+image.shape[1]]
+        
+        return output
+    
+    @staticmethod
+    def bilinear_demosaic(cfa: np.ndarray, pattern: np.ndarray) -> np.ndarray:
+        """
+        Vectorized bilinear demosaicing similar to MATLAB's demosaic function.
+        Uses convolution-based interpolation (pure numpy, no scipy).
+        """
+        height, width = cfa.shape
+        rgb = np.zeros((height, width, 3), dtype=np.float64)
+        
+        # Create masks for each color position
+        # rawpy pattern: 0=R, 1=G, 2=B, 3=G2 (second green)
+        r_mask = np.zeros((height, width), dtype=bool)
+        g_mask = np.zeros((height, width), dtype=bool)
+        b_mask = np.zeros((height, width), dtype=bool)
+        
+        for i in range(2):
+            for j in range(2):
+                channel = pattern[i, j]
+                if channel == 0:  # Red
+                    r_mask[i::2, j::2] = True
+                elif channel == 1 or channel == 3:  # Green (G1 or G2)
+                    g_mask[i::2, j::2] = True
+                elif channel == 2:  # Blue
+                    b_mask[i::2, j::2] = True
+        
+        print(f"CFA pattern detected - R: {np.sum(r_mask)}, G: {np.sum(g_mask)}, B: {np.sum(b_mask)} pixels")
+        
+        # Place known values directly
+        rgb[:, :, 0] = np.where(r_mask, cfa, 0)
+        rgb[:, :, 1] = np.where(g_mask, cfa, 0)
+        rgb[:, :, 2] = np.where(b_mask, cfa, 0)
+        
+        # Interpolation kernels
+        kernel_cross = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=np.float64) / 4
+        kernel_diag = np.array([[1, 0, 1], [0, 0, 0], [1, 0, 1]], dtype=np.float64) / 4
+        kernel_h = np.array([[0, 0, 0], [1, 0, 1], [0, 0, 0]], dtype=np.float64) / 2
+        kernel_v = np.array([[0, 1, 0], [0, 0, 0], [0, 1, 0]], dtype=np.float64) / 2
+        
+        # Find pattern positions
+        r_pos = tuple(np.argwhere(pattern == 0)[0])
+        b_pos = tuple(np.argwhere(pattern == 2)[0])
+        
+        # Create position-based masks for interpolation selection
+        row_idx = np.arange(height)[:, np.newaxis]
+        pat_row = row_idx % 2
+        
+        # === Interpolate Red channel ===
+        r_channel = rgb[:, :, 0].copy()
+        r_interp_h = ImageAnalyzer.numpy_convolve2d(r_channel, kernel_h)
+        r_interp_v = ImageAnalyzer.numpy_convolve2d(r_channel, kernel_v)
+        r_interp_diag = ImageAnalyzer.numpy_convolve2d(r_channel, kernel_diag)
+        
+        # Apply red interpolation
+        need_r = ~r_mask
+        same_row_as_r = (pat_row == r_pos[0])
+        rgb[:, :, 0] = np.where(need_r & b_mask, r_interp_diag, rgb[:, :, 0])
+        rgb[:, :, 0] = np.where(need_r & ~b_mask & same_row_as_r, r_interp_h, rgb[:, :, 0])
+        rgb[:, :, 0] = np.where(need_r & ~b_mask & ~same_row_as_r, r_interp_v, rgb[:, :, 0])
+        
+        # Free memory
+        del r_channel, r_interp_h, r_interp_v, r_interp_diag
+        gc.collect()
+        
+        # === Interpolate Blue channel ===
+        b_channel = rgb[:, :, 2].copy()
+        b_interp_h = ImageAnalyzer.numpy_convolve2d(b_channel, kernel_h)
+        b_interp_v = ImageAnalyzer.numpy_convolve2d(b_channel, kernel_v)
+        b_interp_diag = ImageAnalyzer.numpy_convolve2d(b_channel, kernel_diag)
+        
+        # Apply blue interpolation
+        need_b = ~b_mask
+        same_row_as_b = (pat_row == b_pos[0])
+        rgb[:, :, 2] = np.where(need_b & r_mask, b_interp_diag, rgb[:, :, 2])
+        rgb[:, :, 2] = np.where(need_b & ~r_mask & same_row_as_b, b_interp_h, rgb[:, :, 2])
+        rgb[:, :, 2] = np.where(need_b & ~r_mask & ~same_row_as_b, b_interp_v, rgb[:, :, 2])
+        
+        # Free memory
+        del b_channel, b_interp_h, b_interp_v, b_interp_diag
+        gc.collect()
+        
+        # === Interpolate Green channel ===
+        g_channel = rgb[:, :, 1].copy()
+        g_interp_cross = ImageAnalyzer.numpy_convolve2d(g_channel, kernel_cross)
+        rgb[:, :, 1] = np.where(~g_mask, g_interp_cross, rgb[:, :, 1])
+        
+        del g_channel, g_interp_cross
+        gc.collect()
+        
+        print(f"Demosaic complete: output shape {rgb.shape}")
+        return rgb
+    
+    @staticmethod
     def decode_image(file_bytes: bytes, filename: str) -> Image.Image:
         """
         Decode image with fallbacks for RAW formats
@@ -124,27 +286,30 @@ class ImageAnalyzer:
         # Try RAW format if standard fails
         if filename.lower().endswith(('.dng', '.raw', '.cr2', '.nef', '.arw', '.rw2')):
             try:
-                print(f"=== Attempting RAW decode for {filename} ===")
-                with rawpy.imread(io.BytesIO(file_bytes)) as raw:
-                    # Extract RGB image from RAW - MATLAB-compatible settings
-                    # This matches MATLAB's rawread() + demosaic() behavior
-                    rgb = raw.postprocess(
-                        output_bps=16,              # 16-bit output for full precision
-                        use_camera_wb=False,        # NO white balance (like MATLAB)
-                        use_auto_wb=False,          # NO auto white balance
-                        no_auto_bright=True,        # NO auto brightness scaling
-                        output_color=rawpy.ColorSpace.raw,  # NO color matrix (raw sensor colors)
-                        gamma=(1, 1),               # Linear gamma (no gamma correction)
-                        half_size=False,            # Process full resolution
-                    )
-                    print(f"✅ SUCCESS: RAW decoder worked (16-bit, MATLAB-compatible)")
-                    print(f"RAW array shape: {rgb.shape}, dtype: {rgb.dtype}")
-                    print(f"RAW value range: {rgb.min()} - {rgb.max()}")
-                    
-                    # Return as a wrapper that mimics PIL Image interface
-                    return NumpyImageWrapper(rgb)
+                print(f"=== Attempting MATLAB-compatible RAW decode for {filename} ===")
+                rgb = ImageAnalyzer.matlab_compatible_raw_decode(file_bytes)
+                print(f"✅ SUCCESS: MATLAB-compatible RAW decode")
+                print(f"RGB array shape: {rgb.shape}, dtype: {rgb.dtype}")
+                print(f"RGB value range: {rgb.min()} - {rgb.max()}")
+                return NumpyImageWrapper(rgb)
             except Exception as e:
-                print(f"❌ RAW decoder failed: {e}")
+                print(f"❌ MATLAB-compatible RAW decoder failed: {e}")
+                # Fallback to rawpy postprocess
+                try:
+                    print(f"=== Falling back to rawpy postprocess ===")
+                    with rawpy.imread(io.BytesIO(file_bytes)) as raw:
+                        rgb = raw.postprocess(
+                            output_bps=16,
+                            use_camera_wb=False,
+                            use_auto_wb=False,
+                            no_auto_bright=True,
+                            output_color=rawpy.ColorSpace.raw,
+                            gamma=(1, 1),
+                            half_size=False,
+                        )
+                        return NumpyImageWrapper(rgb)
+                except Exception as e2:
+                    print(f"❌ Fallback also failed: {e2}")
         
         raise Exception(f"Failed to decode image - format may not be supported or file may be corrupted")
     
@@ -206,10 +371,17 @@ class ImageAnalyzer:
     @staticmethod
     def calculate_chromaticity_values(img) -> Dict[str, float]:
         """
-        Calculate chromaticity values - MEMORY OPTIMIZED
-        Supports PIL Image, NumpyImageWrapper, and both 8-bit and 16-bit images
-        Uses streaming/online statistics to avoid storing all chromaticity values
-        Processes every pixel but keeps memory under control
+        Calculate chromaticity values - MATLAB COMPATIBLE
+        
+        Matches MATLAB's behavior:
+        - chromaticity_x = R / (R+G+B)
+        - chromaticity_y = G / (R+G+B)  
+        - mean(mean(chromaticity)) for mean
+        - std(chromaticity(:)) for standard deviation
+        
+        Uses one-pass algorithm for memory efficiency:
+        - mean = sum(x) / n
+        - std = sqrt(sum(x^2)/n - mean^2)
         """
         # Get image as numpy array (works for both PIL and NumpyImageWrapper)
         if isinstance(img, NumpyImageWrapper):
@@ -227,25 +399,23 @@ class ImageAnalyzer:
         
         # Detect bit depth from array dtype
         bit_depth = 16 if img_array.dtype == np.uint16 else 8
-        max_value = 65535.0 if bit_depth == 16 else 255.0
         
         print(f"Chromaticity analysis for {width}x{height} ({total_pixels} pixels)")
-        print(f"🎨 Bit depth: {bit_depth}-bit (max value: {max_value})")
-        print(f"🧠 Using memory-optimized streaming statistics")
+        print(f"🎨 Bit depth: {bit_depth}-bit (dtype: {img_array.dtype})")
+        print(f"🧠 Using MATLAB-compatible one-pass algorithm")
         
-        # Use Welford's online algorithm for mean and variance
-        # This processes one row at a time instead of storing all values
+        # One-pass statistics accumulators
+        sum_r_chrom = 0.0
+        sum_g_chrom = 0.0
+        sum_r_chrom_sq = 0.0
+        sum_g_chrom_sq = 0.0
         n = 0  # Count of valid chromaticity samples
-        mean_r = 0.0
-        mean_g = 0.0
-        M2_r = 0.0  # Sum of squared differences for variance
-        M2_g = 0.0
         
         max_red = 0.0
         max_green = 0.0
         max_blue = 0.0
         
-        # Process row by row
+        # Process row by row (memory efficient)
         for y in range(height):
             # Convert single row to float64 for precision
             row = img_array[y].astype(np.float64)
@@ -261,35 +431,46 @@ class ImageAnalyzer:
             if row_max_g > max_green: max_green = row_max_g
             if row_max_b > max_blue: max_blue = row_max_b
             
-            # Calculate chromaticity for this row
+            # Calculate chromaticity for this row (MATLAB style)
+            # MATLAB: chromaticity_x = R ./ (R+G+B)
             rgb_sum = r + g + b
-            valid_mask = rgb_sum > 0.001
+            
+            # Only exclude true division-by-zero (R+G+B=0), match MATLAB behavior
+            valid_mask = rgb_sum > 0
             
             if np.any(valid_mask):
-                r_chrom = r[valid_mask] / rgb_sum[valid_mask]
-                g_chrom = g[valid_mask] / rgb_sum[valid_mask]
+                r_valid = r[valid_mask]
+                g_valid = g[valid_mask]
+                rgb_sum_valid = rgb_sum[valid_mask]
                 
-                # Batch Welford's update for efficiency
-                for i in range(len(r_chrom)):
-                    n += 1
-                    delta_r = r_chrom[i] - mean_r
-                    delta_g = g_chrom[i] - mean_g
-                    mean_r += delta_r / n
-                    mean_g += delta_g / n
-                    delta2_r = r_chrom[i] - mean_r
-                    delta2_g = g_chrom[i] - mean_g
-                    M2_r += delta_r * delta2_r
-                    M2_g += delta_g * delta2_g
+                r_chrom = r_valid / rgb_sum_valid
+                g_chrom = g_valid / rgb_sum_valid
+                
+                # Accumulate sums (vectorized - fast!)
+                sum_r_chrom += np.sum(r_chrom)
+                sum_g_chrom += np.sum(g_chrom)
+                sum_r_chrom_sq += np.sum(r_chrom * r_chrom)
+                sum_g_chrom_sq += np.sum(g_chrom * g_chrom)
+                n += len(r_chrom)
         
         del img_array  # Free memory immediately
         
-        # Calculate final standard deviations
-        std_r = np.sqrt(M2_r / n) if n > 1 else 0.0
-        std_g = np.sqrt(M2_g / n) if n > 1 else 0.0
+        # Calculate final statistics (MATLAB style)
+        if n > 0:
+            mean_r = sum_r_chrom / n
+            mean_g = sum_g_chrom / n
+            # Variance = E[X^2] - E[X]^2
+            var_r = (sum_r_chrom_sq / n) - (mean_r * mean_r)
+            var_g = (sum_g_chrom_sq / n) - (mean_g * mean_g)
+            # Clamp to 0 to handle numerical precision issues
+            std_r = np.sqrt(max(0, var_r))
+            std_g = np.sqrt(max(0, var_g))
+        else:
+            mean_r = mean_g = std_r = std_g = 0.0
         
         print(f"✅ COMPLETED: Chromaticity analysis finished ({bit_depth}-bit)")
-        print(f"Max RGB values ({bit_depth}-bit): R={max_red}, G={max_green}, B={max_blue}")
-        print(f"Chromaticity samples: {n}")
+        print(f"Max RGB values: R={max_red}, G={max_green}, B={max_blue}")
+        print(f"Valid chromaticity samples: {n} / {total_pixels}")
         print(f"Chromaticity means: R={mean_r:.6f}, G={mean_g:.6f}")
         print(f"Chromaticity std devs: R={std_r:.6f}, G={std_g:.6f}")
         
