@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import exifread
 import rawpy
+import gc  # Garbage collection for memory management
 
 app = FastAPI()
 
@@ -98,10 +99,16 @@ class ImageAnalyzer:
             try:
                 print(f"=== Attempting RAW decode for {filename} ===")
                 with rawpy.imread(io.BytesIO(file_bytes)) as raw:
-                    # Extract RGB image from RAW
-                    rgb = raw.postprocess()
+                    # Extract RGB image from RAW with memory-optimized settings
+                    # Use 8-bit output to save memory (16-bit doubles memory usage)
+                    rgb = raw.postprocess(
+                        output_bps=8,           # 8-bit output (saves 50% memory vs 16-bit)
+                        use_camera_wb=True,     # Use camera white balance
+                        no_auto_bright=False,   # Allow auto brightness
+                        half_size=False,        # Process full resolution (required)
+                    )
                     img = Image.fromarray(rgb)
-                    print(f"✅ SUCCESS: RAW decoder worked")
+                    print(f"✅ SUCCESS: RAW decoder worked (8-bit, memory optimized)")
                     print(f"RAW dimensions: {img.size}")
                     return img
             except Exception as e:
@@ -112,24 +119,40 @@ class ImageAnalyzer:
     @staticmethod
     def calculate_mean_rgb(img: Image.Image) -> Dict[str, float]:
         """
-        Calculate mean RGB values
-        Replicates _calculateMeanRGB from Flutter
+        Calculate mean RGB values - MEMORY OPTIMIZED
+        Processes every pixel but uses row-by-row streaming to minimize RAM
         """
         # Convert to RGB if needed
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
-        # Convert to numpy array for efficient processing
-        img_array = np.array(img, dtype=np.float64)
-        height, width = img_array.shape[:2]
+        width, height = img.size
         total_pixels = height * width
         
         print(f"Image dimensions: {width}x{height} ({total_pixels} total pixels)")
+        print(f"🧠 Using memory-optimized row-by-row processing")
         
-        # Calculate mean RGB values
-        mean_red = np.mean(img_array[:, :, 0])
-        mean_green = np.mean(img_array[:, :, 1])
-        mean_blue = np.mean(img_array[:, :, 2])
+        # Process row by row to minimize memory usage
+        # Instead of loading entire image as float64 array
+        sum_red = 0.0
+        sum_green = 0.0
+        sum_blue = 0.0
+        
+        # Get image data as bytes and process in chunks
+        img_array = np.array(img, dtype=np.uint8)  # uint8 uses 1/8 the memory of float64
+        
+        # Process each row
+        for y in range(height):
+            row = img_array[y].astype(np.float32)  # Convert one row at a time
+            sum_red += np.sum(row[:, 0])
+            sum_green += np.sum(row[:, 1])
+            sum_blue += np.sum(row[:, 2])
+        
+        del img_array  # Free memory immediately
+        
+        mean_red = sum_red / total_pixels
+        mean_green = sum_green / total_pixels
+        mean_blue = sum_blue / total_pixels
         
         print(f"✅ COMPLETED: Processed all {total_pixels} pixels")
         
@@ -142,71 +165,91 @@ class ImageAnalyzer:
     @staticmethod
     def calculate_chromaticity_values(img: Image.Image) -> Dict[str, float]:
         """
-        Calculate chromaticity values with streaming statistics
-        Replicates _calculateChromaticityValues from Flutter
+        Calculate chromaticity values - MEMORY OPTIMIZED
+        Uses streaming/online statistics to avoid storing all chromaticity values
+        Processes every pixel but keeps memory under control
         """
         # Convert to RGB if needed
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
-        # Convert to numpy array
-        img_array = np.array(img, dtype=np.float64)
-        height, width = img_array.shape[:2]
+        width, height = img.size
         total_pixels = height * width
         
         print(f"Chromaticity analysis for {width}x{height} ({total_pixels} pixels)")
+        print(f"🧠 Using memory-optimized streaming statistics")
         
-        # Extract RGB channels
-        r = img_array[:, :, 0]
-        g = img_array[:, :, 1]
-        b = img_array[:, :, 2]
+        # Use Welford's online algorithm for mean and variance
+        # This processes one row at a time instead of storing all values
+        n = 0  # Count of valid chromaticity samples
+        mean_r = 0.0
+        mean_g = 0.0
+        M2_r = 0.0  # Sum of squared differences for variance
+        M2_g = 0.0
         
-        # Calculate sum for chromaticity (r + g + b)
-        rgb_sum = r + g + b
+        max_red = 0.0
+        max_green = 0.0
+        max_blue = 0.0
         
-        # Avoid division by zero - only calculate chromaticity where sum > 0.001
-        valid_mask = rgb_sum > 0.001
+        # Load image as uint8 (1/8 memory of float64)
+        img_array = np.array(img, dtype=np.uint8)
         
-        # Calculate chromaticity values
-        r_chromaticity = np.zeros_like(r)
-        g_chromaticity = np.zeros_like(g)
+        # Process row by row
+        for y in range(height):
+            # Convert single row to float32 (not float64)
+            row = img_array[y].astype(np.float32)
+            r = row[:, 0]
+            g = row[:, 1]
+            b = row[:, 2]
+            
+            # Update max values
+            row_max_r = np.max(r)
+            row_max_g = np.max(g)
+            row_max_b = np.max(b)
+            if row_max_r > max_red: max_red = row_max_r
+            if row_max_g > max_green: max_green = row_max_g
+            if row_max_b > max_blue: max_blue = row_max_b
+            
+            # Calculate chromaticity for this row
+            rgb_sum = r + g + b
+            valid_mask = rgb_sum > 0.001
+            
+            if np.any(valid_mask):
+                r_chrom = r[valid_mask] / rgb_sum[valid_mask]
+                g_chrom = g[valid_mask] / rgb_sum[valid_mask]
+                
+                # Welford's online algorithm for each valid pixel
+                for i in range(len(r_chrom)):
+                    n += 1
+                    delta_r = r_chrom[i] - mean_r
+                    delta_g = g_chrom[i] - mean_g
+                    mean_r += delta_r / n
+                    mean_g += delta_g / n
+                    delta2_r = r_chrom[i] - mean_r
+                    delta2_g = g_chrom[i] - mean_g
+                    M2_r += delta_r * delta2_r
+                    M2_g += delta_g * delta2_g
         
-        r_chromaticity[valid_mask] = r[valid_mask] / rgb_sum[valid_mask]
-        g_chromaticity[valid_mask] = g[valid_mask] / rgb_sum[valid_mask]
+        del img_array  # Free memory immediately
         
-        # Calculate statistics only on valid pixels
-        valid_r_chrom = r_chromaticity[valid_mask]
-        valid_g_chrom = g_chromaticity[valid_mask]
-        
-        chromaticity_count = np.sum(valid_mask)
-        
-        # Calculate means
-        mean_r_chromaticity = float(np.mean(valid_r_chrom)) if chromaticity_count > 0 else 0.0
-        mean_g_chromaticity = float(np.mean(valid_g_chrom)) if chromaticity_count > 0 else 0.0
-        
-        # Calculate standard deviations
-        std_r_chromaticity = float(np.std(valid_r_chrom)) if chromaticity_count > 0 else 0.0
-        std_g_chromaticity = float(np.std(valid_g_chrom)) if chromaticity_count > 0 else 0.0
-        
-        # Calculate max RGB values
-        max_red = float(np.max(r))
-        max_green = float(np.max(g))
-        max_blue = float(np.max(b))
+        # Calculate final standard deviations
+        std_r = np.sqrt(M2_r / n) if n > 1 else 0.0
+        std_g = np.sqrt(M2_g / n) if n > 1 else 0.0
         
         print(f"✅ COMPLETED: Chromaticity analysis finished")
         print(f"Max RGB values: R={max_red}, G={max_green}, B={max_blue}")
-        print(f"Chromaticity samples: {chromaticity_count}")
-        print(f"Chromaticity means: R={mean_r_chromaticity}, G={mean_g_chromaticity}")
-        print(f"Chromaticity std devs: R={std_r_chromaticity}, G={std_g_chromaticity}")
+        print(f"Chromaticity samples: {n}")
+        print(f"Chromaticity means: R={mean_r}, G={mean_g}")
+        print(f"Chromaticity std devs: R={std_r}, G={std_g}")
         
         return {
-            'meanRChromaticity': mean_r_chromaticity,
-            'meanGChromaticity': mean_g_chromaticity,
-            'stdRChromaticity': std_r_chromaticity,
-            'stdGChromaticity': std_g_chromaticity,
-            'maxRed': max_red,
-            'maxGreen': max_green,
-            'maxBlue': max_blue,
+            'meanRChromaticity': float(mean_r),
+            'meanGChromaticity': float(mean_g),
+            'stdRChromaticity': float(std_r),
+            'stdGChromaticity': float(std_g),
+            'maxRed': float(max_red),
+            'maxGreen': float(max_green),
+            'maxBlue': float(max_blue),
         }
     
     @staticmethod
@@ -307,8 +350,11 @@ async def root():
 async def analyze_image(file: UploadFile = File(...)):
     """
     Analyze image and return RGB, chromaticity, and EXIF data
-    Replicates the Flutter analyzeImageFromBytes functionality
+    Memory-optimized to work within 512MB RAM limit
     """
+    img = None
+    file_bytes = None
+    
     try:
         # Read file bytes
         file_bytes = await file.read()
@@ -316,21 +362,34 @@ async def analyze_image(file: UploadFile = File(...)):
         filename = file.filename or "unknown"
         
         print(f"\n=== Analyzing {filename} ({file_size} bytes) ===")
+        print(f"🧠 Memory limit: 512MB - using optimized processing")
+        
+        # Extract EXIF data first (before we potentially modify file_bytes)
+        exif_data = ImageAnalyzer.extract_exif_data(file_bytes)
+        photographic_values = ImageAnalyzer.extract_photographic_values(exif_data)
         
         # Decode image
         img = ImageAnalyzer.decode_image(file_bytes, filename)
+        img_width, img_height = img.size
         
-        # Calculate mean RGB values
+        # Free file_bytes memory - we have the decoded image now
+        del file_bytes
+        file_bytes = None
+        gc.collect()
+        print(f"🧹 Freed file bytes from memory")
+        
+        # Calculate mean RGB values (memory optimized)
         rgb_values = ImageAnalyzer.calculate_mean_rgb(img)
+        gc.collect()
         
-        # Calculate chromaticity values
+        # Calculate chromaticity values (memory optimized)
         chromaticity_values = ImageAnalyzer.calculate_chromaticity_values(img)
         
-        # Extract EXIF data
-        exif_data = ImageAnalyzer.extract_exif_data(file_bytes)
-        
-        # Calculate photographic values
-        photographic_values = ImageAnalyzer.extract_photographic_values(exif_data)
+        # Free image memory
+        del img
+        img = None
+        gc.collect()
+        print(f"🧹 Freed image from memory")
         
         # Get file format
         file_extension = filename.split('.')[-1].upper() if '.' in filename else 'UNKNOWN'
@@ -362,8 +421,8 @@ async def analyze_image(file: UploadFile = File(...)):
             "analysisDate": datetime.now().isoformat(),
             "fileSize": file_size_str,
             "imageFormat": file_extension,
-            "imageWidth": img.size[0],  # Actual pixel width
-            "imageHeight": img.size[1],  # Actual pixel height
+            "imageWidth": img_width,
+            "imageHeight": img_height,
             "sV": photographic_values['sV'],
             "aV": photographic_values['aV'],
             "tV": photographic_values['tV'],
@@ -372,12 +431,21 @@ async def analyze_image(file: UploadFile = File(...)):
         }
         
         print(f"✅ Analysis complete for {filename}")
+        gc.collect()
         
         return JSONResponse(content=response)
         
     except Exception as e:
         print(f"❌ Error analyzing image: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to analyze image: {str(e)}")
+    
+    finally:
+        # Ensure cleanup even on error
+        if img is not None:
+            del img
+        if file_bytes is not None:
+            del file_bytes
+        gc.collect()
 
 
 # Vercel serverless function handler
