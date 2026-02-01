@@ -226,9 +226,9 @@ class ImageAnalyzer:
             print(f"Chromaticity: r={mean_r_chrom:.6f}, g={mean_g_chrom:.6f}")
             
             return {
-                'width': width,
-                'height': height,
-                'mean_rgb': {'red': mean_r, 'green': mean_g, 'blue': mean_b},
+                'width': int(width),
+                'height': int(height),
+                'mean_rgb': {'red': float(mean_r), 'green': float(mean_g), 'blue': float(mean_b)},
                 'chromaticity': {
                     'meanRChromaticity': float(mean_r_chrom),
                     'meanGChromaticity': float(mean_g_chrom),
