@@ -6,7 +6,7 @@ import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sig
 import '../models/image_analysis.dart';
 
 class GoogleDriveService {
-  static const String _datasetFolderName = 'UVSN Json Dataset';
+  static const String _datasetFolderName = 'uvsn_json_dataset';
   
   // OAuth Client IDs from Google Cloud Console
   static const String _webClientId = '843540546414-kd8jb440kcgovhf4p94tsl7pri8sre8d.apps.googleusercontent.com';
