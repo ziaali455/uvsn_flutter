@@ -75,6 +75,32 @@ class PhotograpicCalculations:
     ]
     
     @staticmethod
+    def parse_lamp_from_filename(filename: str) -> Optional[str]:
+        """
+        Parse lamp type from filename using MATLAB logic:
+        parts = split(fileName, '_');
+        lamp = parts{2};
+        
+        Example: '250415_222u_01.DNG' -> '222u'
+        """
+        try:
+            # Remove extension and split by underscore
+            name_without_ext = filename.rsplit('.', 1)[0]
+            parts = name_without_ext.split('_')
+            
+            # Get second part (index 1) if it exists
+            if len(parts) >= 2:
+                lamp_code = parts[1]
+                print(f"Parsed lamp code from filename: '{lamp_code}'")
+                return lamp_code
+            else:
+                print(f"Filename doesn't have enough parts for lamp parsing: {filename}")
+                return None
+        except Exception as e:
+            print(f"Error parsing lamp from filename: {e}")
+            return None
+    
+    @staticmethod
     def calculate_sv(iso_speed_ratings: Optional[int]) -> Optional[float]:
         """Calculate S_v = log2(ISOSpeedRatings/3.3333)"""
         if iso_speed_ratings is None or iso_speed_ratings <= 0:
@@ -723,6 +749,9 @@ async def analyze_image(file: UploadFile = File(...)):
         else:
             file_size_str = f"{file_size / (1024 * 1024 * 1024):.1f} GB"
         
+        # Parse lamp type from filename (MATLAB logic: parts = split(fileName, '_'); lamp = parts{2})
+        parsed_lamp = PhotograpicCalculations.parse_lamp_from_filename(filename)
+        
         # Build response matching Flutter ImageAnalysis structure
         response = {
             "fileName": filename,
@@ -746,7 +775,7 @@ async def analyze_image(file: UploadFile = File(...)):
             "aV": photographic_values['aV'],
             "tV": photographic_values['tV'],
             "bV": photographic_values['bV'],
-            "lampCondition": None,
+            "lampCondition": parsed_lamp,  # Auto-parsed from filename
         }
         
         print(f"✅ Analysis complete for {filename}")
