@@ -163,8 +163,9 @@ class ImageAnalyzer:
                 actual_end = min(strip_start + strip_height + pad_bottom, height)
                 
                 # Extract and demosaic this strip
+                # CRITICAL: pass actual_start so demosaic knows the pattern offset!
                 cfa_strip = cfa_full[actual_start:actual_end, :].astype(np.float32)
-                rgb_strip = ImageAnalyzer.demosaic_strip(cfa_strip, pattern, r_pos, b_pos)
+                rgb_strip = ImageAnalyzer.demosaic_strip(cfa_strip, pattern, r_pos, b_pos, actual_start)
                 
                 # Remove padding rows from result
                 if pad_top:
@@ -241,28 +242,36 @@ class ImageAnalyzer:
             }
     
     @staticmethod
-    def demosaic_strip(cfa: np.ndarray, pattern: np.ndarray, r_pos: tuple, b_pos: tuple) -> np.ndarray:
+    def demosaic_strip(cfa: np.ndarray, pattern: np.ndarray, r_pos: tuple, b_pos: tuple, row_offset: int = 0) -> np.ndarray:
         """
         Demosaic a strip of CFA data using bilinear interpolation.
         Input: float32 CFA strip, Output: float32 RGB strip
+        
+        row_offset: the starting row in the original image (for correct pattern alignment)
         """
         height, width = cfa.shape
         rgb = np.zeros((height, width, 3), dtype=np.float32)
         
-        # Create masks for this strip
+        # Create masks for this strip with correct pattern alignment
+        # The pattern repeats every 2 rows, so we need to account for where this strip starts
         r_mask = np.zeros((height, width), dtype=bool)
         g_mask = np.zeros((height, width), dtype=bool)
         b_mask = np.zeros((height, width), dtype=bool)
         
+        # Adjust pattern indices based on row_offset
+        row_phase = row_offset % 2  # 0 or 1
+        
         for i in range(2):
             for j in range(2):
                 channel = pattern[i, j]
+                # Adjust row start based on offset: if row_offset is odd, shift pattern by 1
+                adjusted_i = (i + row_phase) % 2
                 if channel == 0:
-                    r_mask[i::2, j::2] = True
+                    r_mask[adjusted_i::2, j::2] = True
                 elif channel == 1 or channel == 3:
-                    g_mask[i::2, j::2] = True
+                    g_mask[adjusted_i::2, j::2] = True
                 elif channel == 2:
-                    b_mask[i::2, j::2] = True
+                    b_mask[adjusted_i::2, j::2] = True
         
         # Place known values
         rgb[:, :, 0] = np.where(r_mask, cfa, 0)
@@ -280,7 +289,9 @@ class ImageAnalyzer:
                np.roll(np.roll(r_ch, -1, axis=0), -1, axis=1)) / 4
         
         row_idx = np.arange(height)[:, np.newaxis] % 2
-        same_row_r = (row_idx == r_pos[0])
+        # Adjust r_pos and b_pos for the row offset
+        adjusted_r_row = (r_pos[0] + row_offset) % 2
+        same_row_r = (row_idx == adjusted_r_row)
         
         need_r = ~r_mask
         rgb[:, :, 0] = np.where(need_r & b_mask, r_d, rgb[:, :, 0])
@@ -297,7 +308,8 @@ class ImageAnalyzer:
                np.roll(np.roll(b_ch, -1, axis=0), 1, axis=1) + 
                np.roll(np.roll(b_ch, -1, axis=0), -1, axis=1)) / 4
         
-        same_row_b = (row_idx == b_pos[0])
+        adjusted_b_row = (b_pos[0] + row_offset) % 2
+        same_row_b = (row_idx == adjusted_b_row)
         need_b = ~b_mask
         rgb[:, :, 2] = np.where(need_b & r_mask, b_d, rgb[:, :, 2])
         rgb[:, :, 2] = np.where(need_b & ~r_mask & same_row_b, b_h, rgb[:, :, 2])
