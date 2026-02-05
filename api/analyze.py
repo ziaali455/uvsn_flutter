@@ -80,21 +80,23 @@ class PhotograpicCalculations:
         Parse lamp type from filename.
         
         Supports two formats:
-        1. New format: 'IMG####_lamptype.DNG' -> lamptype is after underscore
+        1. New format: 'IMG####_lamp_type_name.DNG' -> everything after first underscore
            Example: 'IMG0001_222u.DNG' -> '222u'
+           Example: 'IMG2032304_title_of_lamp.DNG' -> 'title of lamp'
         2. Old format: 'XXXXXX_LAMP_XX.DNG' -> lamp is second part
            Example: '250415_222u_01.DNG' -> '222u'
         """
         try:
-            # Remove extension and split by underscore
+            # Remove extension
             name_without_ext = filename.rsplit('.', 1)[0]
             parts = name_without_ext.split('_')
             
             if len(parts) >= 2:
                 # Check if first part looks like IMG#### (new format)
                 if parts[0].upper().startswith('IMG'):
-                    # New format: IMG####_lamptype -> lamp is the last part
-                    lamp_code = parts[-1]
+                    # New format: IMG####_lamp_type_name -> everything after first underscore
+                    # Join remaining parts with spaces (underscores become spaces)
+                    lamp_code = ' '.join(parts[1:])
                 else:
                     # Old format: XXXXXX_LAMP_XX -> lamp is second part
                     lamp_code = parts[1]
