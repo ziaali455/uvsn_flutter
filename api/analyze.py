@@ -77,20 +77,28 @@ class PhotograpicCalculations:
     @staticmethod
     def parse_lamp_from_filename(filename: str) -> Optional[str]:
         """
-        Parse lamp type from filename using MATLAB logic:
-        parts = split(fileName, '_');
-        lamp = parts{2};
+        Parse lamp type from filename.
         
-        Example: '250415_222u_01.DNG' -> '222u'
+        Supports two formats:
+        1. New format: 'IMG####_lamptype.DNG' -> lamptype is after underscore
+           Example: 'IMG0001_222u.DNG' -> '222u'
+        2. Old format: 'XXXXXX_LAMP_XX.DNG' -> lamp is second part
+           Example: '250415_222u_01.DNG' -> '222u'
         """
         try:
             # Remove extension and split by underscore
             name_without_ext = filename.rsplit('.', 1)[0]
             parts = name_without_ext.split('_')
             
-            # Get second part (index 1) if it exists
             if len(parts) >= 2:
-                lamp_code = parts[1]
+                # Check if first part looks like IMG#### (new format)
+                if parts[0].upper().startswith('IMG'):
+                    # New format: IMG####_lamptype -> lamp is the last part
+                    lamp_code = parts[-1]
+                else:
+                    # Old format: XXXXXX_LAMP_XX -> lamp is second part
+                    lamp_code = parts[1]
+                
                 print(f"Parsed lamp code from filename: '{lamp_code}'")
                 return lamp_code
             else:
