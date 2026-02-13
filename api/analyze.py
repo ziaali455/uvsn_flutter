@@ -101,6 +101,10 @@ class PhotograpicCalculations:
                     # Old format: XXXXXX_LAMP_XX -> lamp is second part
                     lamp_code = parts[1]
                 
+                # Edge case: convert "222u" to "222 Unfiltered"
+                if lamp_code.lower() == '222u':
+                    lamp_code = '222 Unfiltered'
+                
                 print(f"Parsed lamp code from filename: '{lamp_code}'")
                 return lamp_code
             else:
