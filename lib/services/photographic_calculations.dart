@@ -3,19 +3,17 @@ import 'package:flutter/foundation.dart';
 
 class PhotographicCalculations {
   static const List<String> lampConditions = [
-    '222 Ushio',
-    '222 Nukit',
-    '222 Lumen',
-    '222 Unfiltered',
-    '207 KrBr',
+    '222Lumen',
+    '222Nukit',
+    '222Ushio',
+    '222unfiltered',
     '254',
-    '265 LED',
-    '280 LED',
-    '295 LED',
-    '302',
+    '265LED',
+    '280LED',
+    '295LED',
     '365',
-    'sunlight',
-    'Room light (fluorescent)',
+    'KrBr',
+    'room',
   ];
 
   /// Calculate S_v = log2(ISOSpeedRatings/3.3333)

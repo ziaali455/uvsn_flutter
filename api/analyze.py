@@ -59,60 +59,85 @@ class PhotograpicCalculations:
     """Replicate the Flutter PhotographicCalculations class"""
     
     LAMP_CONDITIONS = [
-        '222 Ushio',
-        '222 Nukit',
-        '222 Lumen',
-        '222 Unfiltered',
-        '207 KrBr',
+        '222Lumen',
+        '222Nukit',
+        '222Ushio',
+        '222unfiltered',
         '254',
-        '265 LED',
-        '280 LED',
-        '295 LED',
-        '302',
+        '265LED',
+        '280LED',
+        '295LED',
         '365',
-        'sunlight',
-        'Room light (fluorescent)',
+        'KrBr',
+        'room',
     ]
     
     @staticmethod
     def parse_lamp_from_filename(filename: str) -> Optional[str]:
         """
         Parse lamp type from filename.
-        
-        Supports two formats:
-        1. New format: 'IMG####_lamp_type_name.DNG' -> everything after first underscore
-           Example: 'IMG0001_222u.DNG' -> '222u'
-           Example: 'IMG2032304_title_of_lamp.DNG' -> 'title of lamp'
-        2. Old format: 'XXXXXX_LAMP_XX.DNG' -> lamp is second part
-           Example: '250415_222u_01.DNG' -> '222u'
+
+        Primary format: lamptype_numberofimage (e.g. 222u_01.DNG, 302_05.DNG)
+          -> lamp = first part (lamptype). Second part is image number.
+        Also supports:
+        - IMG####_lamp_type_name.DNG -> everything after first underscore
+        - Single part: lamptype.DNG -> lamptype
         """
         try:
             # Remove extension
             name_without_ext = filename.rsplit('.', 1)[0]
             parts = name_without_ext.split('_')
-            
-            if len(parts) >= 2:
-                # Check if first part looks like IMG#### (new format)
-                if parts[0].upper().startswith('IMG'):
-                    # New format: IMG####_lamp_type_name -> everything after first underscore
-                    # Join remaining parts with spaces (underscores become spaces)
-                    lamp_code = ' '.join(parts[1:])
-                else:
-                    # Old format: XXXXXX_LAMP_XX -> lamp is second part
-                    lamp_code = parts[1]
-                
-                # Edge case: convert "222u" to "222 Unfiltered"
-                if lamp_code.lower() == '222u':
-                    lamp_code = '222 Unfiltered'
-                
-                print(f"Parsed lamp code from filename: '{lamp_code}'")
-                return lamp_code
-            else:
-                print(f"Filename doesn't have enough parts for lamp parsing: {filename}")
+
+            if not parts or not parts[0]:
+                print(f"Filename empty or invalid for lamp parsing: {filename}")
                 return None
+
+            # Format: lamptype_numberofimage -> first part is lamp, second is image number
+            if len(parts) >= 2 and parts[1].isdigit():
+                lamp_code = parts[0]
+            # IMG####_lamp_type_name
+            elif len(parts) >= 2 and parts[0].upper().startswith('IMG'):
+                lamp_code = ' '.join(parts[1:])
+            # Single part: just lamptype
+            elif len(parts) == 1:
+                lamp_code = parts[0]
+            # Fallback: treat first part as lamptype (e.g. lamptype_other)
+            else:
+                lamp_code = parts[0]
+
+            # Normalize to match dropdown display names where applicable
+            lamp_code = PhotograpicCalculations._normalize_lamp_for_dropdown(lamp_code)
+            print(f"Parsed lamp code from filename: '{lamp_code}'")
+            return lamp_code
         except Exception as e:
             print(f"Error parsing lamp from filename: {e}")
             return None
+
+    @staticmethod
+    def _normalize_lamp_for_dropdown(lamp_code: str) -> str:
+        """Map parsed filename codes to the 11 dropdown display names."""
+        if not lamp_code:
+            return lamp_code
+        lower = lamp_code.lower().strip()
+        # Map common filename codes to LAMP_CONDITIONS (11 types)
+        normalizations = {
+            '222lumen': '222Lumen',
+            '222nukit': '222Nukit',
+            '222ushio': '222Ushio',
+            '222u': '222unfiltered',
+            '222unfiltered': '222unfiltered',
+            '254': '254',
+            '265led': '265LED',
+            '280led': '280LED',
+            '295led': '295LED',
+            '365': '365',
+            'krbr': 'KrBr',
+            '207krbr': 'KrBr',
+            'room': 'room',
+            'roomlight': 'room',
+            'fluorescent': 'room',
+        }
+        return normalizations.get(lower, lamp_code)
     
     @staticmethod
     def calculate_sv(iso_speed_ratings: Optional[int]) -> Optional[float]:
