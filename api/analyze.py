@@ -42,27 +42,28 @@ def _get_lamp_classifier():
     return _LAMP_CLASSIFIER
 
 
+# Feature columns used in training: meanRed, meanGreen, meanBlue, r, g
+# (r, g are chromaticity = meanRChromaticity, meanGChromaticity in our API)
+_FEATURE_COLS = ["meanRed", "meanGreen", "meanBlue", "r", "g"]
+# Map API response keys -> feature name (for r, g we use chromaticity)
+_FEATURE_KEY_MAP = {
+    "meanRed": "meanRed",
+    "meanGreen": "meanGreen",
+    "meanBlue": "meanBlue",
+    "r": "meanRChromaticity",
+    "g": "meanGChromaticity",
+}
+
+
 def _analysis_to_feature_vector(response: Dict[str, Any]) -> np.ndarray:
     """
-    Build feature vector from analysis response for Random Forest.
-    Uses model's feature_names_in_ if available, else default order matching common training data.
+    Build 5-feature vector for Random Forest: meanRed, meanGreen, meanBlue, r, g.
+    Matches training: feature_cols = ['meanRed', 'meanGreen', 'meanBlue', 'r', 'g'].
     """
-    # Default feature order (typical for website-generated JSON)
-    default_names = [
-        "meanRed", "meanGreen", "meanBlue",
-        "meanRChromaticity", "meanGChromaticity",
-        "stdRChromaticity", "stdGChromaticity",
-        "maxRed", "maxGreen", "maxBlue",
-        "sV", "aV", "tV", "bV",
-    ]
-    model = _get_lamp_classifier()
-    if hasattr(model, "feature_names_in_"):
-        names = list(model.feature_names_in_)
-    else:
-        names = default_names
     values = []
-    for name in names:
-        v = response.get(name)
+    for col in _FEATURE_COLS:
+        api_key = _FEATURE_KEY_MAP.get(col, col)
+        v = response.get(api_key)
         if v is None or (isinstance(v, float) and math.isnan(v)):
             v = 0.0
         values.append(float(v))
