@@ -5,4 +5,6 @@ Pillow==11.0.0
 numpy==2.1.0
 rawpy==0.25.1
 exifread==3.0.0
+scikit-learn>=1.0.0
+joblib>=1.0.0
 

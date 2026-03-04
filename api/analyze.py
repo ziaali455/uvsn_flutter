@@ -10,11 +10,54 @@ from PIL import Image
 import numpy as np
 import io
 import math
+import os
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import exifread
 import rawpy
 import gc  # Garbage collection for memory management
+
+# Lazy-loaded Random Forest classifier for lamp prediction
+_LAMP_CLASSIFIER = None
+_LAMP_CLASSIFIER_PATH = os.path.join(os.path.dirname(__file__), "RANDOMFOREST.pkl")
+
+
+def _get_lamp_classifier():
+    """Load Random Forest model once and reuse."""
+    global _LAMP_CLASSIFIER
+    if _LAMP_CLASSIFIER is None:
+        if not os.path.isfile(_LAMP_CLASSIFIER_PATH):
+            raise FileNotFoundError(f"Classifier not found: {_LAMP_CLASSIFIER_PATH}")
+        import joblib
+        _LAMP_CLASSIFIER = joblib.load(_LAMP_CLASSIFIER_PATH)
+    return _LAMP_CLASSIFIER
+
+
+def _analysis_to_feature_vector(response: Dict[str, Any]) -> np.ndarray:
+    """
+    Build feature vector from analysis response for Random Forest.
+    Uses model's feature_names_in_ if available, else default order matching common training data.
+    """
+    # Default feature order (typical for website-generated JSON)
+    default_names = [
+        "meanRed", "meanGreen", "meanBlue",
+        "meanRChromaticity", "meanGChromaticity",
+        "stdRChromaticity", "stdGChromaticity",
+        "maxRed", "maxGreen", "maxBlue",
+        "sV", "aV", "tV", "bV",
+    ]
+    model = _get_lamp_classifier()
+    if hasattr(model, "feature_names_in_"):
+        names = list(model.feature_names_in_)
+    else:
+        names = default_names
+    values = []
+    for name in names:
+        v = response.get(name)
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            v = 0.0
+        values.append(float(v))
+    return np.array(values, dtype=np.float64).reshape(1, -1)
 
 app = FastAPI()
 
@@ -138,6 +181,22 @@ class PhotograpicCalculations:
             'fluorescent': 'room',
         }
         return normalizations.get(lower, lamp_code)
+
+    # Minimum sum of mean R + mean G + mean B for accept (reject if below).
+    MIN_SUM_RGB = 100.0
+
+    @staticmethod
+    def check_intensity_acceptable(mean_red: float, mean_green: float, mean_blue: float) -> Tuple[bool, Optional[str]]:
+        """
+        Accept/reject based on (meanR + meanG + meanB) >= MIN_SUM_RGB.
+        Returns (is_valid, validation_error_message or None).
+        """
+        s = mean_red + mean_green + mean_blue
+        if s < PhotograpicCalculations.MIN_SUM_RGB:
+            return False, (
+                f"Low intensity: mean R+G+B ({s:.1f}) below {PhotograpicCalculations.MIN_SUM_RGB}"
+            )
+        return True, None
     
     @staticmethod
     def calculate_sv(iso_speed_ratings: Optional[int]) -> Optional[float]:
@@ -708,77 +767,52 @@ async def root():
     }
 
 
-@app.post("/api/analyze")
-async def analyze_image(file: UploadFile = File(...)):
+async def _analyze_file(file: UploadFile) -> Dict[str, Any]:
     """
-    Analyze image and return RGB, chromaticity, and EXIF data
-    Memory-optimized to work within 512MB RAM limit
-    
-    RAW files use streaming analysis (never materializes full RGB array)
+    Run full image analysis. Returns response dict matching Flutter ImageAnalysis.
+    Used by both /api/analyze and /api/analyze-and-classify.
     """
     img = None
     file_bytes = None
-    
+
     try:
-        # Read file bytes
         file_bytes = await file.read()
         file_size = len(file_bytes)
         filename = file.filename or "unknown"
-        
+
         print(f"\n=== Analyzing {filename} ({file_size} bytes) ===")
         print(f"🧠 Memory limit: 512MB - using optimized processing")
-        
-        # Extract EXIF data first (before we potentially modify file_bytes)
+
         exif_data = ImageAnalyzer.extract_exif_data(file_bytes)
         photographic_values = ImageAnalyzer.extract_photographic_values(exif_data)
-        
-        # Check if RAW file - use streaming analysis (memory efficient)
+
         raw_extensions = ('.dng', '.raw', '.cr2', '.nef', '.arw', '.rw2', '.orf', '.pef')
         is_raw = filename.lower().endswith(raw_extensions)
-        
+
         if is_raw:
             print(f"🎯 RAW file detected - using streaming MATLAB-compatible analysis")
-            # Streaming analysis - never materializes full RGB array
             analysis = ImageAnalyzer.matlab_compatible_streaming_analysis(file_bytes)
-            
             img_width = analysis['width']
             img_height = analysis['height']
             rgb_values = analysis['mean_rgb']
             chromaticity_values = analysis['chromaticity']
-            
-            # Free file_bytes memory
             del file_bytes
             file_bytes = None
             gc.collect()
-            print(f"🧹 Freed file bytes from memory")
         else:
-            # Standard image processing for non-RAW files
             img = ImageAnalyzer.decode_image(file_bytes, filename)
             img_width, img_height = img.size
-            
-            # Free file_bytes memory - we have the decoded image now
             del file_bytes
             file_bytes = None
             gc.collect()
-            print(f"🧹 Freed file bytes from memory")
-            
-            # Calculate mean RGB values (memory optimized)
             rgb_values = ImageAnalyzer.calculate_mean_rgb(img)
             gc.collect()
-            
-            # Calculate chromaticity values (memory optimized)
             chromaticity_values = ImageAnalyzer.calculate_chromaticity_values(img)
-            
-            # Free image memory
             del img
             img = None
             gc.collect()
-            print(f"🧹 Freed image from memory")
-        
-        # Get file format
+
         file_extension = filename.split('.')[-1].upper() if '.' in filename else 'UNKNOWN'
-        
-        # Format file size
         if file_size < 1024:
             file_size_str = f"{file_size} B"
         elif file_size < 1024 * 1024:
@@ -787,16 +821,20 @@ async def analyze_image(file: UploadFile = File(...)):
             file_size_str = f"{file_size / (1024 * 1024):.1f} MB"
         else:
             file_size_str = f"{file_size / (1024 * 1024 * 1024):.1f} GB"
-        
-        # Parse lamp type from filename (MATLAB logic: parts = split(fileName, '_'); lamp = parts{2})
+
         parsed_lamp = PhotograpicCalculations.parse_lamp_from_filename(filename)
-        
-        # Build response matching Flutter ImageAnalysis structure
+        mean_r = float(rgb_values['red'])
+        mean_g = float(rgb_values['green'])
+        mean_b = float(rgb_values['blue'])
+        is_valid, validation_error = PhotograpicCalculations.check_intensity_acceptable(mean_r, mean_g, mean_b)
+        if not is_valid:
+            print(f"⚠️ Reject (intensity): {filename} — {validation_error}")
+
         response = {
             "fileName": filename,
-            "meanRed": rgb_values['red'],
-            "meanGreen": rgb_values['green'],
-            "meanBlue": rgb_values['blue'],
+            "meanRed": mean_r,
+            "meanGreen": mean_g,
+            "meanBlue": mean_b,
             "meanRChromaticity": chromaticity_values['meanRChromaticity'],
             "meanGChromaticity": chromaticity_values['meanGChromaticity'],
             "stdRChromaticity": chromaticity_values['stdRChromaticity'],
@@ -814,25 +852,66 @@ async def analyze_image(file: UploadFile = File(...)):
             "aV": photographic_values['aV'],
             "tV": photographic_values['tV'],
             "bV": photographic_values['bV'],
-            "lampCondition": parsed_lamp,  # Auto-parsed from filename
+            "lampCondition": parsed_lamp,
+            "isValid": is_valid,
+            "validationError": validation_error,
         }
-        
         print(f"✅ Analysis complete for {filename}")
         gc.collect()
-        
-        return JSONResponse(content=response)
-        
-    except Exception as e:
-        print(f"❌ Error analyzing image: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to analyze image: {str(e)}")
-    
+        return response
+
     finally:
-        # Ensure cleanup even on error
         if img is not None:
             del img
         if file_bytes is not None:
             del file_bytes
         gc.collect()
+
+
+@app.post("/api/analyze")
+async def analyze_image(file: UploadFile = File(...)):
+    """
+    Analyze image and return RGB, chromaticity, and EXIF data
+    Memory-optimized to work within 512MB RAM limit
+    RAW files use streaming analysis (never materializes full RGB array)
+    """
+    try:
+        response = await _analyze_file(file)
+        return JSONResponse(content=response)
+    except Exception as e:
+        print(f"❌ Error analyzing image: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze image: {str(e)}")
+
+
+@app.post("/api/analyze-and-classify")
+async def analyze_and_classify(file: UploadFile = File(...)):
+    """
+    Analyze image (same as /api/analyze) then run Random Forest classifier
+    to predict which lamp the image is from. Response includes predictedLamp.
+    """
+    try:
+        response = await _analyze_file(file)
+        try:
+            clf = _get_lamp_classifier()
+            X = _analysis_to_feature_vector(response)
+            pred = clf.predict(X)[0]
+            response["predictedLamp"] = str(pred) if hasattr(pred, "item") else str(pred)
+            if hasattr(clf, "predict_proba"):
+                probs = clf.predict_proba(X)[0]
+                classes = clf.classes_
+                response["predictedLampProbabilities"] = dict(
+                    zip([str(c) for c in classes], [float(p) for p in probs])
+                )
+        except FileNotFoundError as e:
+            response["predictedLampError"] = "Classifier model not available"
+            print(f"Classifier not loaded: {e}")
+        except Exception as e:
+            response["predictedLampError"] = str(e)
+            print(f"Classification error: {e}")
+        return JSONResponse(content=response)
+    except Exception as e:
+        print(f"❌ Error in analyze-and-classify: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze image: {str(e)}")
 
 
 # Vercel serverless function handler
