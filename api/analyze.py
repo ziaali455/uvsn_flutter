@@ -17,29 +17,60 @@ import exifread
 import rawpy
 import gc  # Garbage collection for memory management
 
-# Lazy-loaded Random Forest classifier for lamp prediction
+# Lazy-loaded Random Forest classifier and optional LabelEncoder for lamp prediction
 _LAMP_CLASSIFIER = None
-_LAMP_CLASSIFIER_PATH = os.path.join(os.path.dirname(__file__), "RANDOMFOREST.pkl")
+_LAMP_LABEL_ENCODER = None  # from bundle: used to decode 0,1,2... -> lamp name
+_API_DIR = os.path.dirname(__file__)
+_LAMP_PKL_PATHS = [
+    os.path.join(_API_DIR, "RANDOMFOREST.pkl"),
+    os.path.join(_API_DIR, "lamp_random_forest.pkl"),
+]
+
+
+def _load_pkl(path: str):
+    """Load pkl from path; supports both joblib and pickle formats."""
+    import joblib
+    try:
+        return joblib.load(path)
+    except Exception:
+        import pickle
+        with open(path, "rb") as f:
+            return pickle.load(f)
 
 
 def _get_lamp_classifier():
-    """Load Random Forest model once and reuse. Unwraps if pkl is a dict (e.g. {'model': clf})."""
-    global _LAMP_CLASSIFIER
+    """Load model bundle once and reuse. Expects dict with 'model' and optional 'label_encoder'.
+    Bundle format: {'model': rf, 'label_encoder': le, 'feature_cols': [...]}
+    """
+    global _LAMP_CLASSIFIER, _LAMP_LABEL_ENCODER
     if _LAMP_CLASSIFIER is None:
-        if not os.path.isfile(_LAMP_CLASSIFIER_PATH):
-            raise FileNotFoundError(f"Classifier not found: {_LAMP_CLASSIFIER_PATH}")
-        import joblib
-        loaded = joblib.load(_LAMP_CLASSIFIER_PATH)
+        path = None
+        for p in _LAMP_PKL_PATHS:
+            if os.path.isfile(p):
+                path = p
+                break
+        if path is None:
+            raise FileNotFoundError(f"Classifier not found. Tried: {_LAMP_PKL_PATHS}")
+        loaded = _load_pkl(path)
         if isinstance(loaded, dict):
-            # pkl may be e.g. {'model': clf} or {'classifier': clf}
+            enc = loaded.get("le") or loaded.get("label_encoder")
+            if enc is not None:
+                _LAMP_LABEL_ENCODER = enc
             for key in ("model", "classifier", "clf", "estimator"):
                 if key in loaded and hasattr(loaded[key], "predict"):
                     loaded = loaded[key]
                     break
             else:
-                raise ValueError("Loaded pkl is a dict but has no 'model'/'classifier'/'clf' key with a predictor")
+                raise ValueError("Bundle dict has no 'model'/'classifier'/'clf' key with a predictor")
         _LAMP_CLASSIFIER = loaded
     return _LAMP_CLASSIFIER
+
+
+def _decode_lamp_label(pred: int) -> str:
+    """Convert encoded label (0,1,2,...) to lamp name using bundle's label_encoder."""
+    if _LAMP_LABEL_ENCODER is not None and hasattr(_LAMP_LABEL_ENCODER, "inverse_transform"):
+        return str(_LAMP_LABEL_ENCODER.inverse_transform([pred])[0])
+    return str(pred)
 
 
 # Feature columns used in training: meanRed, meanGreen, meanBlue, r, g
@@ -905,12 +936,15 @@ async def analyze_and_classify(file: UploadFile = File(...)):
             clf = _get_lamp_classifier()
             X = _analysis_to_feature_vector(response)
             pred = clf.predict(X)[0]
-            response["predictedLamp"] = str(pred) if hasattr(pred, "item") else str(pred)
+            pred_int = int(pred) if hasattr(pred, "item") else int(pred)
+            response["predictedLamp"] = _decode_lamp_label(pred_int)
             if hasattr(clf, "predict_proba"):
                 probs = clf.predict_proba(X)[0]
-                classes = clf.classes_
+                class_labels = clf.classes_
+                if _LAMP_LABEL_ENCODER is not None and hasattr(_LAMP_LABEL_ENCODER, "inverse_transform"):
+                    class_labels = _LAMP_LABEL_ENCODER.inverse_transform(class_labels)
                 response["predictedLampProbabilities"] = dict(
-                    zip([str(c) for c in classes], [float(p) for p in probs])
+                    zip([str(c) for c in class_labels], [float(p) for p in probs])
                 )
         except FileNotFoundError as e:
             response["predictedLampError"] = "Classifier model not available"
