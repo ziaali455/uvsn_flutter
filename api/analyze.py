@@ -23,13 +23,22 @@ _LAMP_CLASSIFIER_PATH = os.path.join(os.path.dirname(__file__), "RANDOMFOREST.pk
 
 
 def _get_lamp_classifier():
-    """Load Random Forest model once and reuse."""
+    """Load Random Forest model once and reuse. Unwraps if pkl is a dict (e.g. {'model': clf})."""
     global _LAMP_CLASSIFIER
     if _LAMP_CLASSIFIER is None:
         if not os.path.isfile(_LAMP_CLASSIFIER_PATH):
             raise FileNotFoundError(f"Classifier not found: {_LAMP_CLASSIFIER_PATH}")
         import joblib
-        _LAMP_CLASSIFIER = joblib.load(_LAMP_CLASSIFIER_PATH)
+        loaded = joblib.load(_LAMP_CLASSIFIER_PATH)
+        if isinstance(loaded, dict):
+            # pkl may be e.g. {'model': clf} or {'classifier': clf}
+            for key in ("model", "classifier", "clf", "estimator"):
+                if key in loaded and hasattr(loaded[key], "predict"):
+                    loaded = loaded[key]
+                    break
+            else:
+                raise ValueError("Loaded pkl is a dict but has no 'model'/'classifier'/'clf' key with a predictor")
+        _LAMP_CLASSIFIER = loaded
     return _LAMP_CLASSIFIER
 
 
