@@ -7,4 +7,5 @@ rawpy==0.25.1
 exifread==3.0.0
 scikit-learn>=1.0.0
 joblib>=1.0.0
+pypng>=0.20220715
 

@@ -542,7 +542,109 @@ class ImageAnalyzer:
             print(f"❌ PIL decoder failed: {e}")
         
         raise Exception(f"Failed to decode image - format may not be supported or file may be corrupted")
-    
+
+    @staticmethod
+    def _srgb_to_linear(v: np.ndarray) -> np.ndarray:
+        """Convert sRGB (0-1) to linear (0-1). Vectorized."""
+        out = np.where(v <= 0.04045, v / 12.92, np.power((v + 0.055) / 1.055, 2.4))
+        return out.astype(np.float64)
+
+    @staticmethod
+    def analyze_nonraw_linearized(img) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """
+        For PNG/JPEG etc.: linearize (sRGB -> linear) and scale mean RGB to raw-like
+        range so the 5 classifier features match the raw pipeline.
+        Returns (mean_rgb_dict, chromaticity_dict) in same shape as raw path.
+        """
+        if isinstance(img, NumpyImageWrapper):
+            img_array = np.array(img)
+        else:
+            if img.mode == 'I;16':
+                img = img.convert('RGB')
+            elif img.mode not in ('RGB', 'I;16B', 'RGB16'):
+                img = img.convert('RGB')
+            img_array = np.array(img)
+
+        height, width = img_array.shape[:2]
+        total_pixels = height * width
+        max_val = 65535.0 if img_array.dtype == np.uint16 else 255.0
+
+        # Scale to raw-like range so classifier sees similar values (16-bit scale)
+        LINEAR_SCALE = 65535.0
+
+        sum_r = sum_g = sum_b = 0.0
+        sum_r_chrom = sum_g_chrom = 0.0
+        sum_r_chrom_sq = sum_g_chrom_sq = 0.0
+        n_chrom = 0
+        max_r = max_g = max_b = 0.0
+
+        for y in range(height):
+            row = img_array[y].astype(np.float64) / max_val  # 0-1
+            r_lin = ImageAnalyzer._srgb_to_linear(row[:, 0])
+            g_lin = ImageAnalyzer._srgb_to_linear(row[:, 1])
+            b_lin = ImageAnalyzer._srgb_to_linear(row[:, 2])
+
+            sum_r += np.sum(r_lin)
+            sum_g += np.sum(g_lin)
+            sum_b += np.sum(b_lin)
+            max_r = max(max_r, float(np.max(r_lin)))
+            max_g = max(max_g, float(np.max(g_lin)))
+            max_b = max(max_b, float(np.max(b_lin)))
+
+            rgb_sum = r_lin + g_lin + b_lin
+            valid = rgb_sum > 0
+            if np.any(valid):
+                r_chrom = np.where(valid, r_lin / rgb_sum, 0)
+                g_chrom = np.where(valid, g_lin / rgb_sum, 0)
+                sum_r_chrom += np.sum(r_chrom)
+                sum_g_chrom += np.sum(g_chrom)
+                sum_r_chrom_sq += np.sum(r_chrom * r_chrom)
+                sum_g_chrom_sq += np.sum(g_chrom * g_chrom)
+                n_chrom += int(np.sum(valid))
+
+        del img_array
+
+        mean_r = sum_r / total_pixels
+        mean_g = sum_g / total_pixels
+        mean_b = sum_b / total_pixels
+
+        if n_chrom > 0:
+            mean_r_chrom = sum_r_chrom / n_chrom
+            mean_g_chrom = sum_g_chrom / n_chrom
+            var_r = (sum_r_chrom_sq / n_chrom) - (mean_r_chrom ** 2)
+            var_g = (sum_g_chrom_sq / n_chrom) - (mean_g_chrom ** 2)
+            std_r = np.sqrt(max(0, var_r))
+            std_g = np.sqrt(max(0, var_g))
+        else:
+            mean_r_chrom = mean_g_chrom = std_r = std_g = 0.0
+
+        # Scale linear 0-1 means to raw-like 16-bit range for classifier
+        mean_r_scaled = mean_r * LINEAR_SCALE
+        mean_g_scaled = mean_g * LINEAR_SCALE
+        mean_b_scaled = mean_b * LINEAR_SCALE
+        max_r_scaled = max_r * LINEAR_SCALE
+        max_g_scaled = max_g * LINEAR_SCALE
+        max_b_scaled = max_b * LINEAR_SCALE
+
+        print(f"✅ Non-RAW linearized: mean RGB (scaled) R={mean_r_scaled:.0f}, G={mean_g_scaled:.0f}, B={mean_b_scaled:.0f}")
+        print(f"   Chromaticity (linear): r={mean_r_chrom:.6f}, g={mean_g_chrom:.6f}")
+
+        mean_rgb = {
+            'red': float(mean_r_scaled),
+            'green': float(mean_g_scaled),
+            'blue': float(mean_b_scaled),
+        }
+        chromaticity = {
+            'meanRChromaticity': float(mean_r_chrom),
+            'meanGChromaticity': float(mean_g_chrom),
+            'stdRChromaticity': float(std_r),
+            'stdGChromaticity': float(std_g),
+            'maxRed': float(max_r_scaled),
+            'maxGreen': float(max_g_scaled),
+            'maxBlue': float(max_b_scaled),
+        }
+        return mean_rgb, chromaticity
+
     @staticmethod
     def calculate_mean_rgb(img) -> Dict[str, float]:
         """
@@ -846,9 +948,8 @@ async def _analyze_file(file: UploadFile) -> Dict[str, Any]:
             del file_bytes
             file_bytes = None
             gc.collect()
-            rgb_values = ImageAnalyzer.calculate_mean_rgb(img)
-            gc.collect()
-            chromaticity_values = ImageAnalyzer.calculate_chromaticity_values(img)
+            # Linearize (sRGB -> linear) and scale to raw-like range so classifier features match RAW pipeline
+            rgb_values, chromaticity_values = ImageAnalyzer.analyze_nonraw_linearized(img)
             del img
             img = None
             gc.collect()
